@@ -2,17 +2,18 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
-type View = "工作台" | "知识问答" | "公文写作" | "政策中心" | "我的资料" | "管理后台";
+type View = "工作台" | "知识问答" | "公文写作" | "政策中心" | "我的资料" | "权限中心" | "管理后台";
 type IconName = "home" | "chat" | "pen" | "policy" | "folder" | "admin" | "search" | "send" | "shield" | "arrow" | "refresh";
 
 type DocumentRecord = {
   id: string; title: string; documentType: string; sourceType: string; ownerDepartment: string;
   securityLevel: string; permissionScope: string; lifecycleStatus: string; knowledgeStatus: string;
-  currentVersion: number; createdBy: string; createdAt: string; updatedAt: string;
+  trialDataClass: string; isTrialData: boolean; currentVersion: number; createdBy: string; createdByUserId: string | null; createdAt: string; updatedAt: string;
 };
 type DocumentSummary = { total: number; pending: number; approved: number; draft: number };
 type AuditLog = { id: string; action: string; operator: string; detail: string; createdAt: string };
 type DocumentVersion = { id: string; versionNo: number; content: string; changeSummary: string; versionStatus: string; createdBy: string; createdAt: string };
+type SessionUser = { id: string; name: string; email: string; employeeNo: string | null; departmentName: string; role: string; positionLevel: number; clearanceLevel: number; status: string };
 
 const paths: Record<IconName, React.ReactNode> = {
   home: <><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M9 20v-6h6v6"/></>,
@@ -55,7 +56,10 @@ export default function Home() {
   const [summary, setSummary] = useState<DocumentSummary>({ total: 0, pending: 0, approved: 0, draft: 0 });
   const [dataLoading, setDataLoading] = useState(true);
   const [dataError, setDataError] = useState("");
+  const [currentUser, setCurrentUser] = useState<SessionUser | null>(null);
+  const [sessionError, setSessionError] = useState("");
   const greeting = useMemo(() => new Date().getHours() < 12 ? "上午好" : new Date().getHours() < 18 ? "下午好" : "晚上好", []);
+  const canOpenAdmin = Boolean(currentUser && ["reviewer", "knowledge_admin", "system_admin"].includes(currentUser.role));
 
   const refreshRecords = useCallback(async () => {
     setDataLoading(true);
@@ -70,7 +74,14 @@ export default function Home() {
     finally { setDataLoading(false); }
   }, []);
 
-  useEffect(() => { void refreshRecords(); }, [refreshRecords]);
+  useEffect(() => {
+    void (async () => {
+      const response = await fetch("/api/session", { cache: "no-store" });
+      const result = await response.json() as { user?: SessionUser; error?: string };
+      if (response.ok && result.user) { setCurrentUser(result.user); setSessionError(""); await refreshRecords(); }
+      else { setSessionError(result.error || "无法识别登录账号"); setDataLoading(false); }
+    })();
+  }, [refreshRecords]);
 
   function ask(event: FormEvent) {
     event.preventDefault();
@@ -87,33 +98,36 @@ export default function Home() {
           <p>员工应用</p>
           {nav.map(item => <button key={item.label} className={view === item.label ? "active" : ""} onClick={() => { setView(item.label); setAnswered(false); }}><Icon name={item.icon}/><span>{item.label}</span></button>)}
           <p className="admin-label">平台管理</p>
-          <button className={view === "管理后台" ? "active" : ""} onClick={() => setView("管理后台")}><Icon name="admin"/><span>管理后台</span></button>
+          <button className={view === "权限中心" ? "active" : ""} onClick={() => setView("权限中心")}><Icon name="shield"/><span>权限中心</span></button>
+          {canOpenAdmin && <button className={view === "管理后台" ? "active" : ""} onClick={() => setView("管理后台")}><Icon name="admin"/><span>管理后台</span></button>}
         </nav>
         <div className="secure"><Icon name="shield" size={17}/>数据访问受集团权限保护</div>
-        <button className="profile"><i>陈</i><span><strong>陈奂</strong><small>项目管理员</small></span><b>›</b></button>
+        <button className="profile" onClick={() => setView("权限中心")}><i>{currentUser?.name?.[0] || "员"}</i><span><strong>{currentUser?.name || "正在识别账号"}</strong><small>{currentUser ? `${roleLabel(currentUser.role)} · ${currentUser.departmentName}` : "登录账号校验中"}</small></span><b>›</b></button>
       </aside>
 
       <section className="main">
-        <header><div><span>三江集团</span><b>/</b><strong>{view}</strong></div><aside><em><i/>原型环境</em><button>使用帮助</button></aside></header>
+        <header><div><span>三江集团</span><b>/</b><strong>{view}</strong></div><aside>{currentUser && <span className="identity-chip">D{currentUser.clearanceLevel} · P{currentUser.positionLevel}</span>}<em><i/>权限试用环境</em><button>使用帮助</button></aside></header>
         <div className="content">
-          {view === "工作台" && <Dashboard greeting={greeting} query={query} setQuery={setQuery} ask={ask} docType={docType} setDocType={setDocType} go={setView} records={records} summary={summary} dataLoading={dataLoading}/>} 
-          {view === "知识问答" && <Knowledge query={query} setQuery={setQuery} answered={answered} ask={ask}/>}
-          {view === "政策中心" && <PolicyCenter/>}
-          {view === "公文写作" && <Writing docType={docType} setDocType={setDocType}/>}
-          {view === "我的资料" && <Library records={records} loading={dataLoading} error={dataError} refresh={refreshRecords}/>} 
-          {view === "管理后台" && <Admin records={records} summary={summary} refresh={refreshRecords}/>} 
+          {sessionError && <div className="access-blocked"><Icon name="shield" size={30}/><h2>当前账号暂不能进入资料库</h2><p>{sessionError}</p><span>请由系统管理员在“权限中心”按登录邮箱配置员工级别、部门和数据权限。</span></div>}
+          {!sessionError && view === "工作台" && <Dashboard greeting={greeting} userName={currentUser?.name || "员工"} query={query} setQuery={setQuery} ask={ask} docType={docType} setDocType={setDocType} go={setView} records={records} summary={summary} dataLoading={dataLoading}/>} 
+          {!sessionError && view === "知识问答" && <Knowledge query={query} setQuery={setQuery} answered={answered} ask={ask}/>} 
+          {!sessionError && view === "政策中心" && <PolicyCenter/>}
+          {!sessionError && view === "公文写作" && <Writing docType={docType} setDocType={setDocType}/>} 
+          {!sessionError && view === "我的资料" && <Library user={currentUser} records={records} loading={dataLoading} error={dataError} refresh={refreshRecords}/>} 
+          {!sessionError && view === "权限中心" && <AccessCenter user={currentUser}/>} 
+          {!sessionError && view === "管理后台" && canOpenAdmin && <Admin records={records} summary={summary} refresh={refreshRecords}/>} 
         </div>
       </section>
     </main>
   );
 }
 
-function Dashboard({ greeting, query, setQuery, ask, docType, setDocType, go, records, summary, dataLoading }: {
-  greeting: string; query: string; setQuery: (v: string) => void; ask: (e: FormEvent) => void;
+function Dashboard({ greeting, userName, query, setQuery, ask, docType, setDocType, go, records, summary, dataLoading }: {
+  greeting: string; userName: string; query: string; setQuery: (v: string) => void; ask: (e: FormEvent) => void;
   docType: string; setDocType: (v: string) => void; go: (v: View) => void; records: DocumentRecord[]; summary: DocumentSummary; dataLoading: boolean;
 }) {
   return <>
-    <section className="welcome"><div><p>{greeting}，陈奂</p><h1>今天需要查资料，还是起草一份公文？</h1></div><span>2026年8月24日&nbsp;&nbsp;星期一</span></section>
+    <section className="welcome"><div><p>{greeting}，{userName}</p><h1>今天需要查资料，还是起草一份公文？</h1></div><span>账号权限已在服务端生效</span></section>
     <form className="ask-card" onSubmit={ask}>
       <div className="card-title"><i>AI</i><strong>向集团知识库提问</strong><span>回答将标注来源文件、版本和原文片段</span></div>
       <label className="ask-input"><Icon name="search"/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="例如：集团现行采购制度中，单笔50万元以上项目如何审批？"/><button aria-label="发送问题"><Icon name="send" size={18}/></button></label>
@@ -187,13 +201,17 @@ function statusLabel(status: string) {
   return status === "approved" ? "已入正式知识库" : status === "pending" ? "待审核" : status === "rejected" ? "已退回" : "草稿";
 }
 
+function roleLabel(role: string) {
+  return ({ employee: "普通员工", department_head: "部门负责人", group_leader: "集团领导", reviewer: "资料审核员", knowledge_admin: "知识管理员", system_admin: "系统管理员" } as Record<string,string>)[role] || role;
+}
+
 function formatDate(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
 }
 
-function Library({ records, loading, error, refresh }: { records: DocumentRecord[]; loading: boolean; error: string; refresh: () => Promise<void> }) {
+function Library({ user, records, loading, error, refresh }: { user: SessionUser | null; records: DocumentRecord[]; loading: boolean; error: string; refresh: () => Promise<void> }) {
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
@@ -202,7 +220,7 @@ function Library({ records, loading, error, refresh }: { records: DocumentRecord
   const [versionContent, setVersionContent] = useState("");
   const [changeSummary, setChangeSummary] = useState("人工修改");
   const [versionEditor, setVersionEditor] = useState(false);
-  const [form, setForm] = useState({ title: "", documentType: "制度文件", sourceType: "人工录入", ownerDepartment: "集团办公室", securityLevel: "内部", permissionScope: "集团本部", content: "" });
+  const [form, setForm] = useState({ title: "", documentType: "制度文件", sourceType: "人工录入", ownerDepartment: user?.departmentName || "集团办公室", securityLevel: "内部", permissionScope: "责任部门", trialDataClass: "T2-内部脱敏测试", content: "", confirmedDesensitized: false });
 
   function setField(name: string, value: string) { setForm(previous => ({ ...previous, [name]: value })); }
   async function save(submitMode: "draft" | "pending") {
@@ -212,7 +230,7 @@ function Library({ records, loading, error, refresh }: { records: DocumentRecord
       const response = await fetch("/api/documents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, submitMode }) });
       const result = await response.json() as { error?: string };
       if (!response.ok) throw new Error(result.error || "保存失败");
-      setForm({ ...form, title: "", content: "" }); setAdding(false);
+      setForm({ ...form, title: "", content: "", confirmedDesensitized: false }); setAdding(false);
       setNotice(submitMode === "draft" ? "草稿已保存，系统已生成V1.0版本记录。" : "资料已提交审核，审核通过后才会进入正式知识库。");
       await refresh();
     } catch (e) { setNotice(e instanceof Error ? e.message : "保存失败"); }
@@ -246,20 +264,23 @@ function Library({ records, loading, error, refresh }: { records: DocumentRecord
     <div className="library-actions"><div><strong>资料台账</strong><span>共 {records.length} 份真实记录</span></div><button onClick={() => setAdding(!adding)}>{adding ? "取消新增" : "＋ 新增测试资料"}</button></div>
     {notice && <div className="notice">{notice}</div>}
     {adding && <div className="panel ingest-form">
+      <div className="trial-rule"><Icon name="shield" size={18}/><div><strong>当前为试用数据入口</strong><span>只允许公开资料、内部脱敏测试资料和部门隔离测试资料；真实敏感资料与禁止项不得上传。</span></div></div>
       <div className="form-grid">
         <label><span>文件名称 *</span><input value={form.title} onChange={e => setField("title", e.target.value)} placeholder="例如：集团采购管理办法（试行）"/></label>
+        <label><span>试用数据类别 *</span><select value={form.trialDataClass} onChange={e => { const value = e.target.value; setField("trialDataClass", value); if (value === "T1-公开资料") { setField("securityLevel", "公开"); setField("permissionScope", "公司全员"); } if (value === "T3-部门隔离测试") setField("permissionScope", "责任部门"); }}><option>T1-公开资料</option><option>T2-内部脱敏测试</option><option>T3-部门隔离测试</option></select></label>
         <label><span>文件类型</span><select value={form.documentType} onChange={e => setField("documentType", e.target.value)}><option>制度文件</option><option>通知</option><option>请示</option><option>工作情况汇报</option><option>会议纪要</option><option>政策文件</option><option>其他资料</option></select></label>
         <label><span>数据来源</span><select value={form.sourceType} onChange={e => setField("sourceType", e.target.value)}><option>人工录入</option><option>OA批量导出</option><option>AI生成定稿</option><option>政府官网</option></select></label>
         <label><span>责任部门</span><select value={form.ownerDepartment} onChange={e => setField("ownerDepartment", e.target.value)}><option>集团办公室</option><option>科技与信息化部门</option><option>财务管理部</option><option>运营管理部</option><option>所属子公司</option></select></label>
-        <label><span>密级</span><select value={form.securityLevel} onChange={e => setField("securityLevel", e.target.value)}><option>公开</option><option>内部</option><option>敏感</option></select></label>
-        <label><span>可查看范围</span><select value={form.permissionScope} onChange={e => setField("permissionScope", e.target.value)}><option>集团全员</option><option>集团本部</option><option>责任部门</option><option>指定人员</option></select></label>
+        <label><span>数据级别</span><select disabled={form.trialDataClass === "T1-公开资料"} value={form.securityLevel} onChange={e => setField("securityLevel", e.target.value)}><option>公开</option><option>内部</option>{(user?.clearanceLevel || 0) >= 3 && <option>敏感</option>}</select></label>
+        <label><span>可查看范围</span><select disabled={form.trialDataClass === "T1-公开资料" || form.trialDataClass === "T3-部门隔离测试"} value={form.permissionScope} onChange={e => setField("permissionScope", e.target.value)}><option>公司全员</option><option>集团本部</option><option>责任部门</option><option>领导班子</option><option>指定人员</option></select></label>
       </div>
       <label className="content-field"><span>正文内容 *</span><textarea value={form.content} onChange={e => setField("content", e.target.value)} placeholder="本关先粘贴一小段脱敏测试正文。后续接入OA批量同步和文件上传。"/></label>
-      <div className="form-actions"><small>原文入库后不可直接覆盖；后续修改会生成新版本。</small><button disabled={saving} onClick={() => void save("draft")}>保存草稿</button><button disabled={saving} className="submit" onClick={() => void save("pending")}>{saving ? "正在保存…" : "保存并提交审核"}</button></div>
+      <label className="confirm-check"><input type="checkbox" checked={form.confirmedDesensitized} onChange={e => setForm(previous => ({ ...previous, confirmedDesensitized: e.target.checked }))}/><span>我确认该资料已经脱敏，不含真实财务明细、员工隐私、客户个人信息、账号密码、密钥、未公开合同价格及涉密内容。</span></label>
+      <div className="form-actions"><small>系统将登录账号、部门、员工级别、数据级别和查看范围共同用于权限判断。</small><button disabled={saving} onClick={() => void save("draft")}>保存草稿</button><button disabled={saving} className="submit" onClick={() => void save("pending")}>{saving ? "正在保存…" : "保存并提交审核"}</button></div>
     </div>}
     {error && <div className="notice error">数据库暂时无法读取：{error}</div>}
     <div className="panel library-table"><div className="table-head"><span>文件名称</span><span>来源</span><span>版本</span><span>知识状态</span><span>更新时间</span></div>
-      {loading ? <div className="table-empty">正在读取资料数据库…</div> : records.length === 0 ? <div className="table-empty">数据库已就绪。请新增一份脱敏测试资料。</div> : records.map(d => <button className={selected?.id === d.id ? "selected-row" : ""} onClick={() => void openRecord(d)} key={d.id}><span><i>{d.documentType[0]}</i><span><b>{d.title}</b><small>{d.ownerDepartment} · {d.securityLevel} · {d.permissionScope}</small></span></span><span>{d.sourceType}</span><span>V{d.currentVersion}.0</span><span><em className={`record-status ${d.knowledgeStatus}`}>{statusLabel(d.knowledgeStatus)}</em></span><span>{formatDate(d.updatedAt)}</span></button>)}
+      {loading ? <div className="table-empty">正在读取资料数据库…</div> : records.length === 0 ? <div className="table-empty">当前登录账号没有可见资料，或数据库中尚无资料。</div> : records.map(d => <button className={selected?.id === d.id ? "selected-row" : ""} onClick={() => void openRecord(d)} key={d.id}><span><i>{d.documentType[0]}</i><span><b>{d.title}</b><small>{d.trialDataClass} · {d.ownerDepartment} · {d.securityLevel} · {d.permissionScope}</small></span></span><span>{d.sourceType}</span><span>V{d.currentVersion}.0</span><span><em className={`record-status ${d.knowledgeStatus}`}>{statusLabel(d.knowledgeStatus)}</em></span><span>{formatDate(d.updatedAt)}</span></button>)}
     </div>
     {selected && <section className="panel version-panel"><div className="version-head"><div><strong>{selected.title}</strong><span>版本链 · 原始内容不覆盖</span></div><button onClick={() => { setVersionEditor(!versionEditor); setVersionContent(versions[0]?.content || ""); }}>{versionEditor ? "取消修改" : "＋ 创建新版本"}</button></div>
       {versionEditor && <div className="version-editor"><label><span>修改说明</span><input value={changeSummary} onChange={e => setChangeSummary(e.target.value)} placeholder="例如：根据2026年第3次办公会意见修订"/></label><label><span>新版本正文</span><textarea value={versionContent} onChange={e => setVersionContent(e.target.value)}/></label><button disabled={saving} onClick={() => void saveVersion()}>{saving ? "正在生成…" : "生成新版本并提交审核"}</button></div>}
@@ -278,7 +299,7 @@ function Admin({ records, summary, refresh }: { records: DocumentRecord[]; summa
     const response = await fetch("/api/audit", { cache: "no-store" });
     if (response.ok) { const data = await response.json() as { logs?: AuditLog[] }; setLogs(data.logs || []); }
   }, []);
-  useEffect(() => { void loadLogs(); }, [loadLogs, records.length]);
+  useEffect(() => { void (async () => { await loadLogs(); })(); }, [loadLogs, records.length]);
 
   async function review(id: string, decision: "approve" | "reject") {
     setWorking(id); setMessage("");
@@ -309,6 +330,66 @@ function Admin({ records, summary, refresh }: { records: DocumentRecord[]; summa
       </section>
       <section className="panel audit-panel"><h2>最近审计记录</h2><p>关键操作自动记录操作人、对象和时间。</p>{logs.length === 0 ? <div className="queue-empty">暂无操作记录</div> : logs.slice(0,8).map(log => <article key={log.id}><i/><div><strong>{log.action} · {log.operator}</strong><span>{log.detail}</span><small>{formatDate(log.createdAt)}</small></div></article>)}</section>
     </div>
+  </section>;
+}
+
+function AccessCenter({ user }: { user: SessionUser | null }) {
+  const [users, setUsers] = useState<SessionUser[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [account, setAccount] = useState({ name: "", email: "", employeeNo: "", departmentName: "集团办公室", role: "employee", positionLevel: 1, clearanceLevel: 2 });
+
+  const loadUsers = useCallback(async () => {
+    if (user?.role !== "system_admin") return;
+    const response = await fetch("/api/users", { cache: "no-store" });
+    const result = await response.json() as { users?: SessionUser[]; error?: string };
+    if (response.ok) setUsers(result.users || []); else setMessage(result.error || "读取账号失败");
+  }, [user?.role]);
+  useEffect(() => { void (async () => { await loadUsers(); })(); }, [loadUsers]);
+
+  async function addAccount() {
+    if (!account.name.trim() || !account.email.trim()) { setMessage("请填写员工姓名和实际登录邮箱。"); return; }
+    setSaving(true); setMessage("");
+    try {
+      const response = await fetch("/api/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(account) });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "账号配置失败");
+      setAccount({ ...account, name: "", email: "", employeeNo: "" }); setAdding(false); setMessage("员工账号已配置。该员工使用相同邮箱登录后，系统会自动应用部门、岗位和数据级别权限。");
+      await loadUsers();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "账号配置失败"); }
+    finally { setSaving(false); }
+  }
+
+  const levelRows = [
+    ["D1 公开", "公司官网、公开产品、公开政策、公开案例", "所有已启用员工账号", "允许使用真实公开内容"],
+    ["D2 内部", "脱敏制度、模板、模拟流程、非敏感内部资料", "本部门员工；公司级资料按授权范围", "试用阶段主数据层"],
+    ["D3 敏感", "脱敏后的部门经营样例、虚构合同样例", "部门负责人、集团领导或明确授权人员", "只用模拟或深度脱敏数据"],
+    ["D4 机密", "真实财务明细、人事薪酬、客户隐私、未公开合同价格、密钥", "试用平台不开放", "禁止上传"],
+  ];
+  const roleRows = [
+    ["普通员工", "P1", "D1＋本部门D2", "查询、起草、查看本人草稿"],
+    ["部门负责人", "P3", "D1＋本部门D2/D3", "部门资料查询；是否审核另行授权"],
+    ["集团领导", "P4/P5", "D1＋集团D2＋授权D3", "跨部门查询按分管范围控制"],
+    ["资料审核员", "独立角色", "仍受部门和D级限制", "审核其有权查看的资料"],
+    ["知识管理员", "独立角色", "仍受数据级别和范围限制", "版本、知识发布、失效处理"],
+    ["系统管理员", "技术角色", "不因管理员身份自动获得业务内容", "账号、权限规则和系统配置"],
+  ];
+
+  return <section className="page"><PageTitle kicker="账号与数据权限" title="权限中心" text="每次登录后，系统根据账号、部门、岗位级别、数据级别和单独授权共同决定可见范围。"/>
+    {user && <div className="panel current-account"><div className="account-avatar">{user.name[0]}</div><div><span>当前登录账号</span><h2>{user.name}</h2><p>{user.email} · {user.departmentName}</p></div><div className="account-tags"><em>{roleLabel(user.role)}</em><em>P{user.positionLevel} 岗位级别</em><em>D{user.clearanceLevel} 数据许可</em></div></div>}
+    <div className="access-formula"><Icon name="shield" size={22}/><div><strong>最终可见权限 = 登录账号 ∩ 所属部门 ∩ 岗位级别 ∩ 数据级别 ∩ 文件范围 ∩ 单独授权</strong><span>任一条件不满足，资料列表、正文接口和后续AI检索都会拒绝返回数据。</span></div></div>
+    <section className="panel standard-panel"><div className="standard-head"><div><h2>试用数据分级标准</h2><p>先用您公司的脱敏资料验证，不把高风险真实数据带入试用环境。</p></div><b>强制执行</b></div>
+      <div className="standard-table"><div><span>级别</span><span>试用内容</span><span>允许账号</span><span>限制</span></div>{levelRows.map(row => <article className={row[0].startsWith("D4") ? "forbidden" : ""} key={row[0]}>{row.map(cell => <span key={cell}>{cell}</span>)}</article>)}</div>
+    </section>
+    <section className="panel standard-panel"><div className="standard-head"><div><h2>员工级别与默认权限</h2><p>“岗位高”不等于“什么都能看”，系统管理权也不等于业务数据查看权。</p></div></div>
+      <div className="role-table"><div><span>账号类型</span><span>岗位级别</span><span>默认数据范围</span><span>可执行操作</span></div>{roleRows.map(row => <article key={row[0]}>{row.map(cell => <span key={cell}>{cell}</span>)}</article>)}</div>
+    </section>
+    {user?.role === "system_admin" && <section className="panel account-admin"><div className="account-admin-head"><div><h2>试用员工账号</h2><p>必须填写员工实际登录邮箱；系统不允许用户在前端自行选择身份。</p></div><button onClick={() => setAdding(!adding)}>{adding ? "取消" : "＋ 配置账号"}</button></div>
+      {message && <div className="notice">{message}</div>}
+      {adding && <div className="account-form"><label><span>员工姓名 *</span><input value={account.name} onChange={e => setAccount({...account,name:e.target.value})}/></label><label><span>登录邮箱 *</span><input value={account.email} onChange={e => setAccount({...account,email:e.target.value})}/></label><label><span>员工编号</span><input value={account.employeeNo} onChange={e => setAccount({...account,employeeNo:e.target.value})}/></label><label><span>所属部门</span><select value={account.departmentName} onChange={e => setAccount({...account,departmentName:e.target.value})}><option>集团办公室</option><option>科技与信息化部门</option><option>财务管理部</option><option>运营管理部</option><option>所属子公司</option></select></label><label><span>账号角色</span><select value={account.role} onChange={e => setAccount({...account,role:e.target.value})}><option value="employee">普通员工</option><option value="department_head">部门负责人</option><option value="group_leader">集团领导</option><option value="reviewer">资料审核员</option><option value="knowledge_admin">知识管理员</option><option value="system_admin">系统管理员</option></select></label><label><span>岗位级别</span><select value={account.positionLevel} onChange={e => setAccount({...account,positionLevel:Number(e.target.value)})}>{[1,2,3,4,5].map(x => <option key={x} value={x}>P{x}</option>)}</select></label><label><span>数据许可</span><select value={account.clearanceLevel} onChange={e => setAccount({...account,clearanceLevel:Number(e.target.value)})}><option value={1}>D1 公开</option><option value={2}>D2 内部</option><option value={3}>D3 敏感</option></select></label><button disabled={saving} onClick={() => void addAccount()}>{saving ? "正在配置…" : "保存账号权限"}</button></div>}
+      <div className="user-list"><div><span>员工</span><span>部门</span><span>角色</span><span>岗位/许可</span><span>状态</span></div>{users.map(item => <article key={item.id}><span><b>{item.name}</b><small>{item.email}</small></span><span>{item.departmentName}</span><span>{roleLabel(item.role)}</span><span>P{item.positionLevel} / D{item.clearanceLevel}</span><span>已启用</span></article>)}</div>
+    </section>}
   </section>;
 }
 

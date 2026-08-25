@@ -1,48 +1,56 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
-import { approvals, auditLogs, documents, documentVersions } from "../../../db/schema";
+import { approvals, auditLogs, documentAcl, documents, documentVersions } from "../../../db/schema";
+import { accessError, canReadDocument, requireAccessUser } from "../../../lib/access";
 
 export const runtime = "edge";
 
-function fail(error: unknown) {
-  const message = error instanceof Error ? error.message : "数据库操作失败";
-  return Response.json({ error: message }, { status: 500 });
-}
-
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const user = await requireAccessUser(request);
     const db = getDb();
-    const rows = await db.select().from(documents).orderBy(desc(documents.updatedAt)).limit(100);
-    const [summary] = await db.select({
-      total: sql<number>`count(*)`,
-      pending: sql<number>`sum(case when ${documents.knowledgeStatus} = 'pending' then 1 else 0 end)`,
-      approved: sql<number>`sum(case when ${documents.knowledgeStatus} = 'approved' then 1 else 0 end)`,
-      draft: sql<number>`sum(case when ${documents.knowledgeStatus} = 'draft' then 1 else 0 end)`,
-    }).from(documents);
-    return Response.json({ documents: rows, summary: summary ?? { total: 0, pending: 0, approved: 0, draft: 0 } });
-  } catch (error) { return fail(error); }
+    const [allRows, grants] = await Promise.all([
+      db.select().from(documents).orderBy(desc(documents.updatedAt)).limit(500), db.select().from(documentAcl),
+    ]);
+    const rows = allRows.filter(document => canReadDocument(user, document, grants));
+    const summary = { total: rows.length, pending: rows.filter(x => x.knowledgeStatus === "pending").length,
+      approved: rows.filter(x => x.knowledgeStatus === "approved").length, draft: rows.filter(x => x.knowledgeStatus === "draft").length };
+    return Response.json({ documents: rows.slice(0, 100), summary });
+  } catch (error) { return accessError(error, "读取资料失败"); }
 }
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as Record<string, string>;
-    const title = body.title?.trim();
-    const content = body.content?.trim();
+    const user = await requireAccessUser(request);
+    const body = (await request.json()) as Record<string, string | boolean>;
+    const title = String(body.title || "").trim();
+    const content = String(body.content || "").trim();
     if (!title || !content) return Response.json({ error: "文件名称和正文内容不能为空" }, { status: 400 });
+    if (body.confirmedDesensitized !== true) return Response.json({ error: "试用资料必须先确认已脱敏且不含禁止上传内容" }, { status: 400 });
+
+    const trialDataClass = String(body.trialDataClass || "T2-内部脱敏测试");
+    if (!new Set(["T1-公开资料", "T2-内部脱敏测试", "T3-部门隔离测试"]).has(trialDataClass)) return Response.json({ error: "试用数据类别不符合标准" }, { status: 400 });
+    let securityLevel = String(body.securityLevel || "内部");
+    let permissionScope = String(body.permissionScope || "责任部门");
+    if (trialDataClass === "T1-公开资料") { securityLevel = "公开"; permissionScope = "公司全员"; }
+    if (trialDataClass === "T3-部门隔离测试") permissionScope = "责任部门";
+    const level = { "公开": 1, "内部": 2, "敏感": 3 }[securityLevel];
+    if (!level || level > user.clearanceLevel) return Response.json({ error: "当前账号无权创建该数据级别" }, { status: 403 });
 
     const now = new Date().toISOString();
     const documentId = crypto.randomUUID();
     const versionId = crypto.randomUUID();
     const approvalId = crypto.randomUUID();
-    const operator = body.operator?.trim() || "项目管理员";
+    const operator = user.name;
     const status = body.submitMode === "draft" ? "draft" : "pending";
     const db = getDb();
+    const ownerDepartment = user.positionLevel >= 4 ? String(body.ownerDepartment || user.departmentName) : user.departmentName;
 
     await db.insert(documents).values({
-      id: documentId, title, documentType: body.documentType || "其他资料", sourceType: body.sourceType || "人工录入",
-      sourceRef: body.sourceRef || null, ownerDepartment: body.ownerDepartment || "集团办公室",
-      securityLevel: body.securityLevel || "内部", permissionScope: body.permissionScope || "集团本部",
-      lifecycleStatus: "effective", knowledgeStatus: status, currentVersion: 1, createdBy: operator, createdAt: now, updatedAt: now,
+      id: documentId, title, documentType: String(body.documentType || "其他资料"), sourceType: String(body.sourceType || "人工录入"),
+      sourceRef: String(body.sourceRef || "") || null, ownerDepartment, securityLevel, permissionScope,
+      lifecycleStatus: "effective", trialDataClass, isTrialData: true, knowledgeStatus: status, currentVersion: 1,
+      createdBy: operator, createdByUserId: user.id, createdAt: now, updatedAt: now,
     });
     await db.insert(documentVersions).values({
       id: versionId, documentId, versionNo: 1, content, changeSummary: "首次入库", versionStatus: status, createdBy: operator, createdAt: now,
@@ -50,10 +58,10 @@ export async function POST(request: Request) {
     if (status === "pending") await db.insert(approvals).values({ id: approvalId, documentId, versionId, status: "pending", submittedBy: operator, submittedAt: now });
     await db.insert(auditLogs).values({
       id: crypto.randomUUID(), action: status === "pending" ? "提交审核" : "保存草稿", entityType: "document", entityId: documentId,
-      operator, detail: `${title}｜来源：${body.sourceType || "人工录入"}｜权限：${body.permissionScope || "集团本部"}`, createdAt: now,
+      operator, detail: `${title}｜${trialDataClass}｜${securityLevel}｜${permissionScope}｜${ownerDepartment}`, createdAt: now,
     });
 
     const [created] = await db.select().from(documents).where(eq(documents.id, documentId));
     return Response.json({ document: created }, { status: 201 });
-  } catch (error) { return fail(error); }
+  } catch (error) { return accessError(error, "保存资料失败"); }
 }

@@ -7,18 +7,21 @@ export const departments = sqliteTable("departments", {
 });
 
 export const users = sqliteTable("users", {
-  id: text("id").primaryKey(), name: text("name").notNull(), email: text("email"), departmentId: text("department_id"),
-  role: text("role").notNull().default("employee"), status: text("status").notNull().default("active"),
+  id: text("id").primaryKey(), name: text("name").notNull(), email: text("email").notNull(), employeeNo: text("employee_no"),
+  departmentId: text("department_id"), departmentName: text("department_name").notNull().default("集团办公室"),
+  role: text("role").notNull().default("employee"), positionLevel: integer("position_level").notNull().default(1),
+  clearanceLevel: integer("clearance_level").notNull().default(2), status: text("status").notNull().default("active"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+}, (table) => [uniqueIndex("users_email_unique").on(table.email)]);
 
 export const documents = sqliteTable("documents", {
   id: text("id").primaryKey(), title: text("title").notNull(),
   documentType: text("document_type").notNull().default("其他资料"), sourceType: text("source_type").notNull(), sourceRef: text("source_ref"),
   ownerDepartment: text("owner_department").notNull().default("集团办公室"), securityLevel: text("security_level").notNull().default("内部"),
   permissionScope: text("permission_scope").notNull().default("集团本部"), lifecycleStatus: text("lifecycle_status").notNull().default("effective"),
+  trialDataClass: text("trial_data_class").notNull().default("T2-内部脱敏测试"), isTrialData: integer("is_trial_data", { mode: "boolean" }).notNull().default(true),
   knowledgeStatus: text("knowledge_status").notNull().default("pending"), currentVersion: integer("current_version").notNull().default(1),
-  createdBy: text("created_by").notNull().default("项目管理员"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdBy: text("created_by").notNull().default("项目管理员"), createdByUserId: text("created_by_user_id"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => [index("documents_updated_at_idx").on(table.updatedAt), index("documents_status_idx").on(table.knowledgeStatus), index("documents_source_idx").on(table.sourceType)]);
 
