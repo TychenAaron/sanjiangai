@@ -3,6 +3,7 @@ import { getDb } from "../../../../../db";
 import { approvals, auditLogs, documentAcl, documents, documentVersions } from "../../../../../db/schema";
 import { accessError, canEditDocument, canReadDocument, requireAccessUser } from "../../../../../lib/access";
 import { indexDocumentVersion } from "../../../../../lib/ingestion";
+import { findBlockedMatches } from "../../../../../lib/upload-control";
 
 export const runtime = "edge";
 
@@ -32,6 +33,15 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (!document) return Response.json({ error: "资料不存在" }, { status: 404 });
     const grants = await db.select().from(documentAcl).where(eq(documentAcl.documentId, id));
     if (!canEditDocument(user, document, grants)) return Response.json({ error: "当前账号无权修改该资料" }, { status: 403 });
+    const blocked = await findBlockedMatches({ title: document.title, content });
+    if (blocked.length) {
+      const blockedAt = new Date().toISOString();
+      await db.insert(auditLogs).values({
+        id: crypto.randomUUID(), action: "禁止词条拦截新版本", entityType: "upload_control", entityId: id, operator: user.name,
+        detail: `${document.title}｜命中${blocked.map(item => `${item.term}(${item.matchedField})`).join("、")}｜新版本未保存`, createdAt: blockedAt,
+      });
+      return Response.json({ error: `新版本命中后台禁止上传规则（${[...new Set(blocked.map(item => item.category))].join("、")}），已拒绝保存。` }, { status: 400 });
+    }
     const now = new Date().toISOString();
     const nextVersion = document.currentVersion + 1;
     const versionId = crypto.randomUUID();

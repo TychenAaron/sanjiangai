@@ -13,6 +13,7 @@ type DocumentRecord = {
 };
 type DocumentSummary = { total: number; pending: number; approved: number; draft: number };
 type AuditLog = { id: string; action: string; operator: string; detail: string; createdAt: string };
+type BlockedTerm = { id: string; term: string; category: string; matchScope: string; note: string | null; enabled: boolean; createdBy: string; createdAt: string; updatedAt: string };
 type DocumentVersion = { id: string; versionNo: number; content: string; changeSummary: string; versionStatus: string; createdBy: string; createdAt: string };
 type SessionUser = { id: string; name: string; email: string; employeeNo: string | null; departmentName: string; role: string; positionLevel: number; clearanceLevel: number; status: string };
 type KnowledgeResult = {
@@ -133,7 +134,7 @@ export default function Home() {
           {!sessionError && view === "公文写作" && <Writing docType={docType} setDocType={setDocType}/>} 
           {!sessionError && view === "我的资料" && <Library user={currentUser} records={records} loading={dataLoading} error={dataError} refresh={refreshRecords}/>} 
           {!sessionError && view === "权限中心" && <AccessCenter user={currentUser}/>} 
-          {!sessionError && view === "管理后台" && canOpenAdmin && <Admin records={records} summary={summary} refresh={refreshRecords}/>} 
+          {!sessionError && view === "管理后台" && canOpenAdmin && <Admin user={currentUser} records={records} summary={summary} refresh={refreshRecords}/>} 
         </div>
       </section>
     </main>
@@ -340,17 +341,60 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
   </section>;
 }
 
-function Admin({ records, summary, refresh }: { records: DocumentRecord[]; summary: DocumentSummary; refresh: () => Promise<void> }) {
+function Admin({ user, records, summary, refresh }: { user: SessionUser | null; records: DocumentRecord[]; summary: DocumentSummary; refresh: () => Promise<void> }) {
   const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [blockedTerms, setBlockedTerms] = useState<BlockedTerm[]>([]);
   const [working, setWorking] = useState("");
   const [message, setMessage] = useState("");
+  const [ruleForm, setRuleForm] = useState({ term: "", category: "涉密与敏感事项", matchScope: "all", note: "" });
   const pending = records.filter(item => item.knowledgeStatus === "pending");
+  const canManageRules = Boolean(user && ["system_admin", "knowledge_admin"].includes(user.role));
 
   const loadLogs = useCallback(async () => {
     const response = await fetch("/api/audit", { cache: "no-store" });
     if (response.ok) { const data = await response.json() as { logs?: AuditLog[] }; setLogs(data.logs || []); }
   }, []);
-  useEffect(() => { void (async () => { await loadLogs(); })(); }, [loadLogs, records.length]);
+  const loadBlockedTerms = useCallback(async () => {
+    if (!canManageRules) return;
+    const response = await fetch("/api/blocked-terms", { cache: "no-store" });
+    if (response.ok) { const data = await response.json() as { terms?: BlockedTerm[] }; setBlockedTerms(data.terms || []); }
+  }, [canManageRules]);
+  useEffect(() => { void (async () => { await loadLogs(); await loadBlockedTerms(); })(); }, [loadLogs, loadBlockedTerms, records.length]);
+
+  async function addBlockedTerm() {
+    if (ruleForm.term.trim().length < 2) { setMessage("禁止上传词条至少填写2个字符，避免单字误拦截。"); return; }
+    setWorking("new-rule"); setMessage("");
+    try {
+      const response = await fetch("/api/blocked-terms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(ruleForm) });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "添加词条失败");
+      setRuleForm({ ...ruleForm, term: "", note: "" }); setMessage("禁止上传词条已启用。新文件将在写入资料库前自动检查。");
+      await loadBlockedTerms(); await loadLogs();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "添加词条失败"); }
+    finally { setWorking(""); }
+  }
+
+  async function toggleBlockedTerm(item: BlockedTerm) {
+    setWorking(item.id); setMessage("");
+    try {
+      const response = await fetch(`/api/blocked-terms/${item.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !item.enabled }) });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "更新词条失败");
+      await loadBlockedTerms(); await loadLogs();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "更新词条失败"); }
+    finally { setWorking(""); }
+  }
+
+  async function deleteBlockedTerm(item: BlockedTerm) {
+    setWorking(item.id); setMessage("");
+    try {
+      const response = await fetch(`/api/blocked-terms/${item.id}`, { method: "DELETE" });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "删除词条失败");
+      setMessage(`词条“${item.term}”已删除。`); await loadBlockedTerms(); await loadLogs();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "删除词条失败"); }
+    finally { setWorking(""); }
+  }
 
   async function review(id: string, decision: "approve" | "reject") {
     setWorking(id); setMessage("");
@@ -369,12 +413,18 @@ function Admin({ records, summary, refresh }: { records: DocumentRecord[]; summa
       ["数据来源","OA同步、人工录入、政府官网监测",`${summary.total}份资料`],
       ["资料审核","新文件审核、版本确认、失效处理",`${summary.pending}项待处理`],
       ["用户与权限","部门、角色、知识库和文件权限","数据表已建立"],
+      ["上传管控","后台禁止词条、入库前拦截、审计留痕",`${blockedTerms.filter(item => item.enabled).length}条已启用`],
       ["模型管理","Qwen3.8-27B＋Embedding＋Reranker＋OCR","模型网关已预留"],
       ["公文模板","请示、通知、工作情况汇报","3个现行模板"],
       ["审计日志","入库、审核、同步和配置记录",`${logs.length}条记录`],
       ["业务扩展中心","财务、运营及其他业务模块的接口与权限","已预留"],
     ].map(x => <button className="panel" key={x[0]}><span><strong>{x[0]}</strong><small>{x[1]}</small></span><em>{x[2]}</em><Icon name="arrow" size={17}/></button>)}</div>
     {message && <div className="notice admin-notice">{message}</div>}
+    {canManageRules && <section className="panel upload-control-panel"><div className="control-head"><div><h2>禁止上传词条库</h2><p>命中规则时，系统在保存原文件之前拒绝上传，并记录操作账号、文件名和命中词条。</p></div><b>{blockedTerms.filter(item => item.enabled).length}条生效中</b></div>
+      <div className="rule-form"><label><span>禁止词条 *</span><input value={ruleForm.term} onChange={event => setRuleForm({ ...ruleForm, term: event.target.value })} placeholder="例如：某保密项目代号"/></label><label><span>分类</span><select value={ruleForm.category} onChange={event => setRuleForm({ ...ruleForm, category: event.target.value })}><option>涉密与敏感事项</option><option>个人隐私</option><option>财务与合同敏感信息</option><option>账号口令与密钥</option><option>自定义禁止项</option></select></label><label><span>检查范围</span><select value={ruleForm.matchScope} onChange={event => setRuleForm({ ...ruleForm, matchScope: event.target.value })}><option value="all">文件名＋标题＋正文</option><option value="filename">仅文件名和标题</option><option value="content">仅正文</option></select></label><label><span>管理备注</span><input value={ruleForm.note} onChange={event => setRuleForm({ ...ruleForm, note: event.target.value })} placeholder="填写设置原因或批准人"/></label><button disabled={working === "new-rule"} onClick={() => void addBlockedTerm()}>{working === "new-rule" ? "正在添加…" : "添加并立即启用"}</button></div>
+      <div className="rule-list"><div><span>词条</span><span>分类</span><span>检查范围</span><span>状态</span><span>操作</span></div>{blockedTerms.length === 0 ? <p>尚未设置词条。建议先加入用于测试的虚构项目代号，验证拦截后再设置正式规则。</p> : blockedTerms.map(item => <article key={item.id}><span><b>{item.term}</b><small>{item.note || `由${item.createdBy}设置`}</small></span><span>{item.category}</span><span>{item.matchScope === "all" ? "文件名＋正文" : item.matchScope === "filename" ? "仅文件名" : "仅正文"}</span><span><em className={item.enabled ? "enabled" : "disabled"}>{item.enabled ? "已启用" : "已停用"}</em></span><span><button disabled={working === item.id} onClick={() => void toggleBlockedTerm(item)}>{item.enabled ? "停用" : "启用"}</button><button disabled={working === item.id} className="delete" onClick={() => void deleteBlockedTerm(item)}>删除</button></span></article>)}</div>
+      <div className="control-note"><Icon name="shield" size={17}/><span><strong>拦截范围：</strong>Word/TXT文件上传、粘贴正文、新版本正文。规则只检查后续入库内容，不自动删除已经存在的资料。</span></div>
+    </section>}
     <div className="governance-grid">
       <section className="panel review-panel"><h2>资料审核队列 <em>{pending.length}</em></h2><p>只有审核通过的版本才能进入正式知识库，供后续AI检索引用。</p>
         {pending.length === 0 ? <div className="queue-empty">暂无待审核资料</div> : pending.map(item => <article key={item.id}><div><strong>{item.title}</strong><span>{item.documentType} · {item.sourceType} · {item.permissionScope} · V{item.currentVersion}.0</span></div><button disabled={working === item.id} onClick={() => void review(item.id, "reject")}>退回</button><button disabled={working === item.id} className="approve" onClick={() => void review(item.id, "approve")}>审核通过</button></article>)}

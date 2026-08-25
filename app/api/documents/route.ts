@@ -3,6 +3,7 @@ import { getDb } from "../../../db";
 import { approvals, auditLogs, documentAcl, documents, documentVersions } from "../../../db/schema";
 import { accessError, canReadDocument, requireAccessUser } from "../../../lib/access";
 import { indexDocumentVersion } from "../../../lib/ingestion";
+import { findBlockedMatches } from "../../../lib/upload-control";
 
 export const runtime = "edge";
 
@@ -29,6 +30,17 @@ export async function POST(request: Request) {
     if (!title || !content) return Response.json({ error: "文件名称和正文内容不能为空" }, { status: 400 });
     if (body.confirmedDesensitized !== true) return Response.json({ error: "试用资料必须先确认已脱敏且不含禁止上传内容" }, { status: 400 });
 
+    const db = getDb();
+    const blocked = await findBlockedMatches({ title, content });
+    if (blocked.length) {
+      const now = new Date().toISOString();
+      await db.insert(auditLogs).values({
+        id: crypto.randomUUID(), action: "禁止词条拦截录入", entityType: "upload_control", entityId: crypto.randomUUID(), operator: user.name,
+        detail: `${title}｜命中${blocked.map(item => `${item.term}(${item.matchedField})`).join("、")}｜正文未保存`, createdAt: now,
+      });
+      return Response.json({ error: `内容命中后台禁止上传规则（${[...new Set(blocked.map(item => item.category))].join("、")}），本次录入已拒绝。` }, { status: 400 });
+    }
+
     const trialDataClass = String(body.trialDataClass || "T2-内部脱敏测试");
     if (!new Set(["T1-公开资料", "T2-内部脱敏测试", "T3-部门隔离测试"]).has(trialDataClass)) return Response.json({ error: "试用数据类别不符合标准" }, { status: 400 });
     let securityLevel = String(body.securityLevel || "内部");
@@ -44,7 +56,6 @@ export async function POST(request: Request) {
     const approvalId = crypto.randomUUID();
     const operator = user.name;
     const status = body.submitMode === "draft" ? "draft" : "pending";
-    const db = getDb();
     const ownerDepartment = user.positionLevel >= 4 ? String(body.ownerDepartment || user.departmentName) : user.departmentName;
 
     await db.insert(documents).values({

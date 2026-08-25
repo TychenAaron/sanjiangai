@@ -4,6 +4,7 @@ import { getDb } from "../../../../db";
 import { approvals, auditLogs, documents, documentVersions } from "../../../../db/schema";
 import { accessError, requireAccessUser } from "../../../../lib/access";
 import { extractUpload, indexDocumentVersion, safeStorageName } from "../../../../lib/ingestion";
+import { findBlockedMatches } from "../../../../lib/upload-control";
 
 export const runtime = "edge";
 
@@ -29,6 +30,16 @@ export async function POST(request: Request) {
     const { buffer, content } = await extractUpload(file);
     const title = String(form.get("title") || file.name.replace(/\.[^.]+$/, "")).trim();
     if (!title) return Response.json({ error: "请填写文件名称" }, { status: 400 });
+    const db = getDb();
+    const blocked = await findBlockedMatches({ title, fileName: file.name, content });
+    if (blocked.length) {
+      const now = new Date().toISOString();
+      await db.insert(auditLogs).values({
+        id: crypto.randomUUID(), action: "禁止词条拦截上传", entityType: "upload_control", entityId: crypto.randomUUID(), operator: user.name,
+        detail: `${file.name}｜命中${blocked.map(item => `${item.term}(${item.matchedField})`).join("、")}｜原文件未保存`, createdAt: now,
+      });
+      return Response.json({ error: `文件命中后台禁止上传规则（${[...new Set(blocked.map(item => item.category))].join("、")}），原文件未保存，请联系管理员。` }, { status: 400 });
+    }
     const runtime = env as unknown as { BUCKET?: Bucket };
     if (!runtime.BUCKET) throw new Error("文件存储尚未启用");
 
@@ -42,7 +53,6 @@ export async function POST(request: Request) {
       customMetadata: { uploadedBy: user.id, trialDataClass },
     });
 
-    const db = getDb();
     await db.insert(documents).values({
       id: documentId, title, documentType: String(form.get("documentType") || "其他资料"), sourceType: "文件上传",
       sourceRef: file.name, ownerDepartment, securityLevel, permissionScope, lifecycleStatus: "effective", trialDataClass, isTrialData: true,

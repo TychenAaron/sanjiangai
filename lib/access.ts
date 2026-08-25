@@ -70,6 +70,7 @@ export function canReviewDocument(user: AccessUser, document: AccessDocument, gr
 }
 
 export function canManageUsers(user: AccessUser) { return user.role === "system_admin"; }
+export function canManageUploadRules(user: AccessUser) { return user.role === "system_admin" || user.role === "knowledge_admin"; }
 export function canReadAudit(user: AccessUser) { return reviewRoles.has(user.role); }
 
 export class AccessError extends Error {

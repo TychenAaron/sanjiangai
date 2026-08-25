@@ -75,6 +75,17 @@ export const syncJobs = sqliteTable("sync_jobs", {
   startedAt: text("started_at"), finishedAt: text("finished_at"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+export const blockedTerms = sqliteTable("blocked_terms", {
+  id: text("id").primaryKey(), term: text("term").notNull(), normalizedTerm: text("normalized_term").notNull(),
+  category: text("category").notNull().default("自定义禁止项"), matchScope: text("match_scope").notNull().default("all"),
+  note: text("note"), enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  createdBy: text("created_by").notNull(), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("blocked_terms_normalized_unique").on(table.normalizedTerm),
+  index("blocked_terms_enabled_idx").on(table.enabled),
+]);
+
 export const auditLogs = sqliteTable("audit_logs", {
   id: text("id").primaryKey(), action: text("action").notNull(), entityType: text("entity_type").notNull(), entityId: text("entity_id").notNull(),
   operator: text("operator").notNull().default("项目管理员"), detail: text("detail").notNull(), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
