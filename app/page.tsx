@@ -12,6 +12,7 @@ type DocumentRecord = {
 };
 type DocumentSummary = { total: number; pending: number; approved: number; draft: number };
 type AuditLog = { id: string; action: string; operator: string; detail: string; createdAt: string };
+type DocumentVersion = { id: string; versionNo: number; content: string; changeSummary: string; versionStatus: string; createdBy: string; createdAt: string };
 
 const paths: Record<IconName, React.ReactNode> = {
   home: <><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M9 20v-6h6v6"/></>,
@@ -196,6 +197,11 @@ function Library({ records, loading, error, refresh }: { records: DocumentRecord
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
+  const [selected, setSelected] = useState<DocumentRecord | null>(null);
+  const [versions, setVersions] = useState<DocumentVersion[]>([]);
+  const [versionContent, setVersionContent] = useState("");
+  const [changeSummary, setChangeSummary] = useState("人工修改");
+  const [versionEditor, setVersionEditor] = useState(false);
   const [form, setForm] = useState({ title: "", documentType: "制度文件", sourceType: "人工录入", ownerDepartment: "集团办公室", securityLevel: "内部", permissionScope: "集团本部", content: "" });
 
   function setField(name: string, value: string) { setForm(previous => ({ ...previous, [name]: value })); }
@@ -210,6 +216,28 @@ function Library({ records, loading, error, refresh }: { records: DocumentRecord
       setNotice(submitMode === "draft" ? "草稿已保存，系统已生成V1.0版本记录。" : "资料已提交审核，审核通过后才会进入正式知识库。");
       await refresh();
     } catch (e) { setNotice(e instanceof Error ? e.message : "保存失败"); }
+    finally { setSaving(false); }
+  }
+
+  async function openRecord(record: DocumentRecord) {
+    setSelected(record); setVersionEditor(false); setNotice("");
+    const response = await fetch(`/api/documents/${record.id}/versions`, { cache: "no-store" });
+    const result = await response.json() as { versions?: DocumentVersion[]; error?: string };
+    if (!response.ok) { setNotice(result.error || "读取版本失败"); return; }
+    setVersions(result.versions || []); setVersionContent(result.versions?.[0]?.content || "");
+  }
+
+  async function saveVersion() {
+    if (!selected || !versionContent.trim()) return;
+    setSaving(true); setNotice("");
+    try {
+      const response = await fetch(`/api/documents/${selected.id}/versions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: versionContent, changeSummary }) });
+      const result = await response.json() as { error?: string; version?: number };
+      if (!response.ok) throw new Error(result.error || "创建新版本失败");
+      setVersionEditor(false); await refresh();
+      await openRecord({ ...selected, currentVersion: result.version || selected.currentVersion + 1, knowledgeStatus: "pending" });
+      setNotice(`V${result.version}.0已生成并提交审核，旧版本仍完整保留。`);
+    } catch (e) { setNotice(e instanceof Error ? e.message : "创建新版本失败"); }
     finally { setSaving(false); }
   }
 
@@ -231,8 +259,12 @@ function Library({ records, loading, error, refresh }: { records: DocumentRecord
     </div>}
     {error && <div className="notice error">数据库暂时无法读取：{error}</div>}
     <div className="panel library-table"><div className="table-head"><span>文件名称</span><span>来源</span><span>版本</span><span>知识状态</span><span>更新时间</span></div>
-      {loading ? <div className="table-empty">正在读取资料数据库…</div> : records.length === 0 ? <div className="table-empty">数据库已就绪。请新增一份脱敏测试资料。</div> : records.map(d => <button key={d.id}><span><i>{d.documentType[0]}</i><span><b>{d.title}</b><small>{d.ownerDepartment} · {d.securityLevel} · {d.permissionScope}</small></span></span><span>{d.sourceType}</span><span>V{d.currentVersion}.0</span><span><em className={`record-status ${d.knowledgeStatus}`}>{statusLabel(d.knowledgeStatus)}</em></span><span>{formatDate(d.updatedAt)}</span></button>)}
+      {loading ? <div className="table-empty">正在读取资料数据库…</div> : records.length === 0 ? <div className="table-empty">数据库已就绪。请新增一份脱敏测试资料。</div> : records.map(d => <button className={selected?.id === d.id ? "selected-row" : ""} onClick={() => void openRecord(d)} key={d.id}><span><i>{d.documentType[0]}</i><span><b>{d.title}</b><small>{d.ownerDepartment} · {d.securityLevel} · {d.permissionScope}</small></span></span><span>{d.sourceType}</span><span>V{d.currentVersion}.0</span><span><em className={`record-status ${d.knowledgeStatus}`}>{statusLabel(d.knowledgeStatus)}</em></span><span>{formatDate(d.updatedAt)}</span></button>)}
     </div>
+    {selected && <section className="panel version-panel"><div className="version-head"><div><strong>{selected.title}</strong><span>版本链 · 原始内容不覆盖</span></div><button onClick={() => { setVersionEditor(!versionEditor); setVersionContent(versions[0]?.content || ""); }}>{versionEditor ? "取消修改" : "＋ 创建新版本"}</button></div>
+      {versionEditor && <div className="version-editor"><label><span>修改说明</span><input value={changeSummary} onChange={e => setChangeSummary(e.target.value)} placeholder="例如：根据2026年第3次办公会意见修订"/></label><label><span>新版本正文</span><textarea value={versionContent} onChange={e => setVersionContent(e.target.value)}/></label><button disabled={saving} onClick={() => void saveVersion()}>{saving ? "正在生成…" : "生成新版本并提交审核"}</button></div>}
+      <div className="version-list">{versions.map(version => <article key={version.id}><b>V{version.versionNo}.0</b><div><strong>{version.changeSummary}</strong><span>{version.createdBy} · {formatDate(version.createdAt)}</span></div><em className={`record-status ${version.versionStatus}`}>{statusLabel(version.versionStatus)}</em></article>)}</div>
+    </section>}
   </section>;
 }
 
