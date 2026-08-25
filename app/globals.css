@@ -116,6 +116,7 @@ button { cursor: pointer; }
 .recent-row strong { font-size: 9px; }
 .recent-row small { margin-top: 3px; color: var(--muted); font-size: 7px; }
 .recent-row > b { color: #99a6b2; font-weight: 400; }
+.no-records { margin-top: 12px; padding: 18px; border: 1px dashed #cbd6e0; border-radius: 8px; background: #fafcfd; color: var(--muted); font-size: 9px; text-align: center; }
 .extensions > div:last-child { display: grid; grid-template-columns: repeat(3,1fr); gap: 9px; margin-top: 13px; }
 .extensions > div:last-child button { position: relative; padding: 13px; border: 1px dashed #cbd5df; border-radius: 8px; background: #fafbfd; color: var(--ink); text-align: left; }
 .extensions button > i { position: absolute; top: 9px; right: 9px; padding: 3px 6px; border-radius: 999px; background: #edf1f5; color: #7d8b9a; font-size: 7px; font-style: normal; }
@@ -200,6 +201,35 @@ button { cursor: pointer; }
 .library-table > button { border: 0; border-bottom: 1px solid var(--line); background: white; color: var(--ink); font-size: 8px; text-align: left; }
 .library-table > button > span:first-child { display: flex; align-items: center; gap: 8px; }
 .library-table > button > span:first-child i { display: grid; place-items: center; width: 25px; height: 29px; border-radius: 4px; background: #eaf0f7; color: var(--blue); font-style: normal; }
+.library-table > button > span:first-child > span { min-width: 0; }
+.library-table > button > span:first-child b, .library-table > button > span:first-child small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-table > button > span:first-child b { color: var(--ink); font-size: 8px; }
+.library-table > button > span:first-child small { margin-top: 3px; color: var(--muted); font-size: 7px; }
+.library-actions { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 10px; }
+.library-actions strong, .library-actions span { display: block; }
+.library-actions strong { color: var(--navy); font-size: 12px; }
+.library-actions span { margin-top: 3px; color: var(--muted); font-size: 8px; }
+.library-actions button { padding: 9px 12px; border: 0; border-radius: 7px; background: var(--navy); color: white; font-size: 9px; }
+.notice { margin: 10px 0; padding: 10px 13px; border: 1px solid #cfe1d9; border-radius: 8px; background: #f1f8f5; color: var(--green); font-size: 9px; }
+.notice.error { border-color: #ead0cf; background: #fff5f4; color: #a34b44; }
+.ingest-form { margin-bottom: 13px; padding: 18px; }
+.form-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; }
+.ingest-form label > span { display: block; margin-bottom: 6px; color: var(--navy); font-size: 8px; font-weight: 700; }
+.ingest-form input, .ingest-form select, .ingest-form textarea { width: 100%; border: 1px solid #ced9e3; border-radius: 7px; outline: 0; background: white; color: var(--ink); font-size: 9px; }
+.ingest-form input, .ingest-form select { height: 36px; padding: 0 10px; }
+.ingest-form input:focus, .ingest-form select:focus, .ingest-form textarea:focus { border-color: #4f789f; box-shadow: 0 0 0 3px rgba(45,93,145,.07); }
+.content-field { display: block; margin-top: 13px; }
+.ingest-form textarea { min-height: 130px; padding: 11px; line-height: 1.7; resize: vertical; }
+.form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.form-actions small { flex: 1; color: var(--muted); font-size: 8px; }
+.form-actions button { padding: 8px 12px; border: 1px solid #cbd6df; border-radius: 7px; background: white; color: var(--navy); font-size: 8px; }
+.form-actions button.submit { border-color: var(--navy); background: var(--navy); color: white; }
+.form-actions button:disabled { cursor: wait; opacity: .6; }
+.table-empty { padding: 28px; color: var(--muted); font-size: 9px; text-align: center; }
+.record-status { display: inline-block; padding: 4px 7px; border-radius: 999px; background: #edf2f6; color: var(--muted); font-size: 7px; font-style: normal; }
+.record-status.pending { background: #fff3df; color: #9b6618; }
+.record-status.approved { background: #edf6f1; color: var(--green); }
+.record-status.rejected { background: #fff0ef; color: #a44942; }
 
 .admin-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 12px; }
 .admin-grid > button { display: flex; align-items: center; gap: 12px; padding: 17px; color: var(--ink); text-align: left; }
@@ -209,6 +239,27 @@ button { cursor: pointer; }
 .admin-grid small { margin-top: 5px; color: var(--muted); font-size: 8px; }
 .admin-grid em { padding: 4px 7px; border-radius: 999px; background: #edf5f1; color: var(--green); font-size: 7px; font-style: normal; }
 .admin-grid svg { color: #8c9baa; }
+.admin-notice { margin-top: 14px; }
+.governance-grid { display: grid; grid-template-columns: minmax(0,1.18fr) minmax(300px,.82fr); gap: 13px; margin-top: 13px; }
+.review-panel, .audit-panel { padding: 18px; }
+.review-panel h2, .audit-panel h2 { margin: 0; color: var(--navy); font-size: 12px; }
+.review-panel h2 em { display: inline-block; margin-left: 6px; padding: 2px 6px; border-radius: 999px; background: #fff0da; color: #9b6618; font-size: 8px; font-style: normal; }
+.review-panel > p, .audit-panel > p { margin: 5px 0 12px; color: var(--muted); font-size: 8px; }
+.review-panel article { display: flex; align-items: center; gap: 7px; padding: 11px 0; border-top: 1px solid var(--line); }
+.review-panel article > div { flex: 1; min-width: 0; }
+.review-panel article strong, .review-panel article span { display: block; }
+.review-panel article strong { overflow: hidden; color: var(--ink); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.review-panel article span { margin-top: 4px; color: var(--muted); font-size: 7px; }
+.review-panel article button { padding: 6px 8px; border: 1px solid #d4dde5; border-radius: 6px; background: white; color: var(--muted); font-size: 7px; }
+.review-panel article button.approve { border-color: var(--green); background: var(--green); color: white; }
+.queue-empty { padding: 23px 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 8px; text-align: center; }
+.audit-panel article { display: flex; gap: 9px; padding: 9px 0; border-top: 1px solid var(--line); }
+.audit-panel article > i { width: 7px; height: 7px; flex: 0 0 auto; margin-top: 3px; border-radius: 50%; background: var(--green); }
+.audit-panel article > div { min-width: 0; }
+.audit-panel article strong, .audit-panel article span, .audit-panel article small { display: block; }
+.audit-panel article strong { color: var(--ink); font-size: 8px; }
+.audit-panel article span { overflow: hidden; margin-top: 3px; color: var(--muted); font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.audit-panel article small { margin-top: 3px; color: #9aa5b0; font-size: 6px; }
 
 @media (max-width: 960px) {
   .shell { grid-template-columns: 76px minmax(0,1fr); }
@@ -216,7 +267,7 @@ button { cursor: pointer; }
   .brand > span, .sidebar nav > p, .sidebar nav > button span, .secure, .profile > span, .profile > b { display: none; }
   .sidebar nav > button, .profile { justify-content: center; }
   .content { width: calc(100% - 36px); }
-  .module-grid, .policy-layout { grid-template-columns: 1fr; }
+  .module-grid, .policy-layout, .governance-grid { grid-template-columns: 1fr; }
   .watch-sites { display: none; }
 }
 
@@ -234,7 +285,7 @@ button { cursor: pointer; }
   .ask-card { padding: 16px; }
   .quick { overflow-x: auto; flex-wrap: nowrap; }
   .quick button { flex: 0 0 auto; }
-  .doc-types, .large-types, .extensions > div:last-child, .policy-strip, .admin-grid { grid-template-columns: 1fr; }
+  .doc-types, .large-types, .extensions > div:last-child, .policy-strip, .admin-grid, .form-grid { grid-template-columns: 1fr; }
   .doc-types > button small { white-space: normal; }
   .policy-toolbar { gap: 10px; overflow-x: auto; }
   .policy-toolbar > div { flex: 0 0 auto; }
@@ -245,4 +296,6 @@ button { cursor: pointer; }
   .table-head { display: none; }
   .library-table > button { grid-template-columns: 1fr auto; }
   .library-table > button span:nth-child(2), .library-table > button span:nth-child(3), .library-table > button span:nth-child(5) { display: none; }
+  .form-actions { align-items: stretch; flex-direction: column; }
+  .form-actions small { margin-bottom: 4px; }
 }

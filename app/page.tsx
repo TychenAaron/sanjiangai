@@ -1,9 +1,17 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 type View = "工作台" | "知识问答" | "公文写作" | "政策中心" | "我的资料" | "管理后台";
 type IconName = "home" | "chat" | "pen" | "policy" | "folder" | "admin" | "search" | "send" | "shield" | "arrow" | "refresh";
+
+type DocumentRecord = {
+  id: string; title: string; documentType: string; sourceType: string; ownerDepartment: string;
+  securityLevel: string; permissionScope: string; lifecycleStatus: string; knowledgeStatus: string;
+  currentVersion: number; createdBy: string; createdAt: string; updatedAt: string;
+};
+type DocumentSummary = { total: number; pending: number; approved: number; draft: number };
+type AuditLog = { id: string; action: string; operator: string; detail: string; createdAt: string };
 
 const paths: Record<IconName, React.ReactNode> = {
   home: <><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M9 20v-6h6v6"/></>,
@@ -31,12 +39,6 @@ const nav: { label: View; icon: IconName }[] = [
   { label: "我的资料", icon: "folder" },
 ];
 
-const recentDocs = [
-  ["请示", "关于推进集团AI知识平台试点的请示", "人工修改中", "今天 10:24"],
-  ["汇报", "集团数字化基础设施建设情况汇报", "最终定稿", "8月22日"],
-  ["通知", "关于开展OA资料清点工作的通知", "已入知识库", "8月20日"],
-];
-
 const policies = [
   { level: "省政府", title: "关于加快推进数字经济高质量发展的有关政策", date: "2026-08-23", state: "待审核", fresh: true },
   { level: "省科技厅", title: "青海省科技计划项目申报工作通知", date: "2026-08-21", state: "已收录", fresh: true },
@@ -48,7 +50,26 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [answered, setAnswered] = useState(false);
   const [docType, setDocType] = useState("请示");
+  const [records, setRecords] = useState<DocumentRecord[]>([]);
+  const [summary, setSummary] = useState<DocumentSummary>({ total: 0, pending: 0, approved: 0, draft: 0 });
+  const [dataLoading, setDataLoading] = useState(true);
+  const [dataError, setDataError] = useState("");
   const greeting = useMemo(() => new Date().getHours() < 12 ? "上午好" : new Date().getHours() < 18 ? "下午好" : "晚上好", []);
+
+  const refreshRecords = useCallback(async () => {
+    setDataLoading(true);
+    try {
+      const response = await fetch("/api/documents", { cache: "no-store" });
+      const result = await response.json() as { documents?: DocumentRecord[]; summary?: DocumentSummary; error?: string };
+      if (!response.ok) throw new Error(result.error || "读取资料失败");
+      setRecords(result.documents || []);
+      setSummary(result.summary || { total: 0, pending: 0, approved: 0, draft: 0 });
+      setDataError("");
+    } catch (error) { setDataError(error instanceof Error ? error.message : "读取资料失败"); }
+    finally { setDataLoading(false); }
+  }, []);
+
+  useEffect(() => { void refreshRecords(); }, [refreshRecords]);
 
   function ask(event: FormEvent) {
     event.preventDefault();
@@ -74,21 +95,21 @@ export default function Home() {
       <section className="main">
         <header><div><span>三江集团</span><b>/</b><strong>{view}</strong></div><aside><em><i/>原型环境</em><button>使用帮助</button></aside></header>
         <div className="content">
-          {view === "工作台" && <Dashboard greeting={greeting} query={query} setQuery={setQuery} ask={ask} docType={docType} setDocType={setDocType} go={setView}/>}
+          {view === "工作台" && <Dashboard greeting={greeting} query={query} setQuery={setQuery} ask={ask} docType={docType} setDocType={setDocType} go={setView} records={records} summary={summary} dataLoading={dataLoading}/>} 
           {view === "知识问答" && <Knowledge query={query} setQuery={setQuery} answered={answered} ask={ask}/>}
           {view === "政策中心" && <PolicyCenter/>}
           {view === "公文写作" && <Writing docType={docType} setDocType={setDocType}/>}
-          {view === "我的资料" && <Library/>}
-          {view === "管理后台" && <Admin/>}
+          {view === "我的资料" && <Library records={records} loading={dataLoading} error={dataError} refresh={refreshRecords}/>} 
+          {view === "管理后台" && <Admin records={records} summary={summary} refresh={refreshRecords}/>} 
         </div>
       </section>
     </main>
   );
 }
 
-function Dashboard({ greeting, query, setQuery, ask, docType, setDocType, go }: {
+function Dashboard({ greeting, query, setQuery, ask, docType, setDocType, go, records, summary, dataLoading }: {
   greeting: string; query: string; setQuery: (v: string) => void; ask: (e: FormEvent) => void;
-  docType: string; setDocType: (v: string) => void; go: (v: View) => void;
+  docType: string; setDocType: (v: string) => void; go: (v: View) => void; records: DocumentRecord[]; summary: DocumentSummary; dataLoading: boolean;
 }) {
   return <>
     <section className="welcome"><div><p>{greeting}，陈奂</p><h1>今天需要查资料，还是起草一份公文？</h1></div><span>2026年8月24日&nbsp;&nbsp;星期一</span></section>
@@ -106,8 +127,8 @@ function Dashboard({ greeting, query, setQuery, ask, docType, setDocType, go }: 
       </article>
       <article className="panel sources">
         <PanelHead icon="folder" title="AI资料库" sub="平台独立数据库"/>
-        <div className="numbers"><div><strong>86</strong><span>OA有效文件</span></div><div><strong>19</strong><span>最终定稿</span></div><div><strong>31</strong><span>外部政策</span></div></div>
-        <div className="sync"><span><i/>全部来源同步正常</span><small>今天 09:30</small></div>
+        <div className="numbers"><div><strong>{dataLoading ? "—" : summary.total}</strong><span>全部资料</span></div><div><strong>{dataLoading ? "—" : summary.approved}</strong><span>正式知识</span></div><div><strong>{dataLoading ? "—" : summary.pending}</strong><span>待审核</span></div></div>
+        <div className="sync"><span><i/>数据库连接正常</span><small>实时读取</small></div>
       </article>
     </section>
 
@@ -118,7 +139,7 @@ function Dashboard({ greeting, query, setQuery, ask, docType, setDocType, go }: 
 
     <section className="panel recent">
       <PanelHead icon="folder" title="最近文档" sub="草稿、人工修改稿和最终定稿全程留痕" action="查看全部" onClick={() => go("我的资料")}/>
-      {recentDocs.map(d => <button className="recent-row" key={d[1]}><i>{d[0][0]}</i><span><strong>{d[1]}</strong><small>{d[0]} · {d[3]}</small></span><em>{d[2]}</em><b>›</b></button>)}
+      {records.length === 0 ? <div className="no-records">尚无真实资料，进入“我的资料”添加第一份测试文件。</div> : records.slice(0,3).map(d => <button className="recent-row" key={d.id} onClick={() => go("我的资料")}><i>{d.documentType[0]}</i><span><strong>{d.title}</strong><small>{d.sourceType} · {formatDate(d.updatedAt)}</small></span><em>{statusLabel(d.knowledgeStatus)}</em><b>›</b></button>)}
     </section>
 
     <section className="panel extensions">
@@ -161,24 +182,101 @@ function Writing({ docType, setDocType }: { docType:string; setDocType:(v:string
   </section>;
 }
 
-function Library() {
-  return <section className="page"><PageTitle kicker="AI独立资料数据库" title="我的资料" text="OA转载、人工上传、AI生成、人工修改和最终定稿分别保存，任何修改均保留版本。"/>
-    <div className="data-flow"><div><b>01</b><strong>原始资料层</strong><span>OA原文、政府网页、上传文件</span></div><i>→</i><div><b>02</b><strong>加工与草稿层</strong><span>解析文本、AI草稿、人工修改稿</span></div><i>→</i><div><b>03</b><strong>正式知识层</strong><span>经审核的现行文件和最终定稿</span></div></div>
-    <div className="panel library-table"><div className="table-head"><span>文件名称</span><span>来源</span><span>版本</span><span>知识状态</span><span>更新时间</span></div>{recentDocs.map((d,i) => <button key={d[1]}><span><i>{d[0][0]}</i>{d[1]}</span><span>{i===2?"OA同步":"AI公文"}</span><span>V{3-i}.0</span><span>{d[2]}</span><span>{d[3]}</span></button>)}</div>
+function statusLabel(status: string) {
+  return status === "approved" ? "已入正式知识库" : status === "pending" ? "待审核" : status === "rejected" ? "已退回" : "草稿";
+}
+
+function formatDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
+}
+
+function Library({ records, loading, error, refresh }: { records: DocumentRecord[]; loading: boolean; error: string; refresh: () => Promise<void> }) {
+  const [adding, setAdding] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [form, setForm] = useState({ title: "", documentType: "制度文件", sourceType: "人工录入", ownerDepartment: "集团办公室", securityLevel: "内部", permissionScope: "集团本部", content: "" });
+
+  function setField(name: string, value: string) { setForm(previous => ({ ...previous, [name]: value })); }
+  async function save(submitMode: "draft" | "pending") {
+    if (!form.title.trim() || !form.content.trim()) { setNotice("请先填写文件名称和正文内容。"); return; }
+    setSaving(true); setNotice("");
+    try {
+      const response = await fetch("/api/documents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, submitMode }) });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "保存失败");
+      setForm({ ...form, title: "", content: "" }); setAdding(false);
+      setNotice(submitMode === "draft" ? "草稿已保存，系统已生成V1.0版本记录。" : "资料已提交审核，审核通过后才会进入正式知识库。");
+      await refresh();
+    } catch (e) { setNotice(e instanceof Error ? e.message : "保存失败"); }
+    finally { setSaving(false); }
+  }
+
+  return <section className="page"><PageTitle kicker="AI独立资料数据库" title="我的资料" text="OA转载、人工录入、AI生成、人工修改和最终定稿分别保存，任何修改均保留版本。"/>
+    <div className="data-flow"><div><b>01</b><strong>原始资料层</strong><span>OA原文、政府网页、人工录入</span></div><i>→</i><div><b>02</b><strong>加工与草稿层</strong><span>解析文本、AI草稿、人工修改稿</span></div><i>→</i><div><b>03</b><strong>正式知识层</strong><span>经审核的现行文件和最终定稿</span></div></div>
+    <div className="library-actions"><div><strong>资料台账</strong><span>共 {records.length} 份真实记录</span></div><button onClick={() => setAdding(!adding)}>{adding ? "取消新增" : "＋ 新增测试资料"}</button></div>
+    {notice && <div className="notice">{notice}</div>}
+    {adding && <div className="panel ingest-form">
+      <div className="form-grid">
+        <label><span>文件名称 *</span><input value={form.title} onChange={e => setField("title", e.target.value)} placeholder="例如：集团采购管理办法（试行）"/></label>
+        <label><span>文件类型</span><select value={form.documentType} onChange={e => setField("documentType", e.target.value)}><option>制度文件</option><option>通知</option><option>请示</option><option>工作情况汇报</option><option>会议纪要</option><option>政策文件</option><option>其他资料</option></select></label>
+        <label><span>数据来源</span><select value={form.sourceType} onChange={e => setField("sourceType", e.target.value)}><option>人工录入</option><option>OA批量导出</option><option>AI生成定稿</option><option>政府官网</option></select></label>
+        <label><span>责任部门</span><select value={form.ownerDepartment} onChange={e => setField("ownerDepartment", e.target.value)}><option>集团办公室</option><option>科技与信息化部门</option><option>财务管理部</option><option>运营管理部</option><option>所属子公司</option></select></label>
+        <label><span>密级</span><select value={form.securityLevel} onChange={e => setField("securityLevel", e.target.value)}><option>公开</option><option>内部</option><option>敏感</option></select></label>
+        <label><span>可查看范围</span><select value={form.permissionScope} onChange={e => setField("permissionScope", e.target.value)}><option>集团全员</option><option>集团本部</option><option>责任部门</option><option>指定人员</option></select></label>
+      </div>
+      <label className="content-field"><span>正文内容 *</span><textarea value={form.content} onChange={e => setField("content", e.target.value)} placeholder="本关先粘贴一小段脱敏测试正文。后续接入OA批量同步和文件上传。"/></label>
+      <div className="form-actions"><small>原文入库后不可直接覆盖；后续修改会生成新版本。</small><button disabled={saving} onClick={() => void save("draft")}>保存草稿</button><button disabled={saving} className="submit" onClick={() => void save("pending")}>{saving ? "正在保存…" : "保存并提交审核"}</button></div>
+    </div>}
+    {error && <div className="notice error">数据库暂时无法读取：{error}</div>}
+    <div className="panel library-table"><div className="table-head"><span>文件名称</span><span>来源</span><span>版本</span><span>知识状态</span><span>更新时间</span></div>
+      {loading ? <div className="table-empty">正在读取资料数据库…</div> : records.length === 0 ? <div className="table-empty">数据库已就绪。请新增一份脱敏测试资料。</div> : records.map(d => <button key={d.id}><span><i>{d.documentType[0]}</i><span><b>{d.title}</b><small>{d.ownerDepartment} · {d.securityLevel} · {d.permissionScope}</small></span></span><span>{d.sourceType}</span><span>V{d.currentVersion}.0</span><span><em className={`record-status ${d.knowledgeStatus}`}>{statusLabel(d.knowledgeStatus)}</em></span><span>{formatDate(d.updatedAt)}</span></button>)}
+    </div>
   </section>;
 }
 
-function Admin() {
+function Admin({ records, summary, refresh }: { records: DocumentRecord[]; summary: DocumentSummary; refresh: () => Promise<void> }) {
+  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [working, setWorking] = useState("");
+  const [message, setMessage] = useState("");
+  const pending = records.filter(item => item.knowledgeStatus === "pending");
+
+  const loadLogs = useCallback(async () => {
+    const response = await fetch("/api/audit", { cache: "no-store" });
+    if (response.ok) { const data = await response.json() as { logs?: AuditLog[] }; setLogs(data.logs || []); }
+  }, []);
+  useEffect(() => { void loadLogs(); }, [loadLogs, records.length]);
+
+  async function review(id: string, decision: "approve" | "reject") {
+    setWorking(id); setMessage("");
+    try {
+      const response = await fetch(`/api/documents/${id}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision, reviewer: "资料审核员" }) });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "审核失败");
+      setMessage(decision === "approve" ? "审核通过：该版本已进入正式知识层。" : "资料已退回修改。");
+      await refresh(); await loadLogs();
+    } catch (e) { setMessage(e instanceof Error ? e.message : "审核失败"); }
+    finally { setWorking(""); }
+  }
+
   return <section className="page"><PageTitle kicker="平台治理" title="管理后台" text="统一管理资料来源、审核发布、用户权限、模型和运行审计。"/>
     <div className="admin-grid">{[
-      ["数据来源","OA同步、人工上传、政府官网监测","3个来源正常"],
-      ["资料审核","新文件审核、版本确认、失效处理","2项待处理"],
-      ["用户与权限","部门、角色、知识库和文件权限","20名试点用户"],
-      ["模型管理","DeepSeek、向量模型、重排模型","原型配置"],
+      ["数据来源","OA同步、人工录入、政府官网监测",`${summary.total}份资料`],
+      ["资料审核","新文件审核、版本确认、失效处理",`${summary.pending}项待处理`],
+      ["用户与权限","部门、角色、知识库和文件权限","数据表已建立"],
+      ["模型管理","DeepSeek、向量模型、重排模型","第三关接入"],
       ["公文模板","请示、通知、工作情况汇报","3个现行模板"],
-      ["审计日志","查询、生成、导出、同步和配置记录","今日36条"],
+      ["审计日志","入库、审核、同步和配置记录",`${logs.length}条记录`],
       ["业务扩展中心","财务、运营及其他业务模块的接口与权限","已预留"],
     ].map(x => <button className="panel" key={x[0]}><span><strong>{x[0]}</strong><small>{x[1]}</small></span><em>{x[2]}</em><Icon name="arrow" size={17}/></button>)}</div>
+    {message && <div className="notice admin-notice">{message}</div>}
+    <div className="governance-grid">
+      <section className="panel review-panel"><h2>资料审核队列 <em>{pending.length}</em></h2><p>只有审核通过的版本才能进入正式知识库，供后续AI检索引用。</p>
+        {pending.length === 0 ? <div className="queue-empty">暂无待审核资料</div> : pending.map(item => <article key={item.id}><div><strong>{item.title}</strong><span>{item.documentType} · {item.sourceType} · {item.permissionScope} · V{item.currentVersion}.0</span></div><button disabled={working === item.id} onClick={() => void review(item.id, "reject")}>退回</button><button disabled={working === item.id} className="approve" onClick={() => void review(item.id, "approve")}>审核通过</button></article>)}
+      </section>
+      <section className="panel audit-panel"><h2>最近审计记录</h2><p>关键操作自动记录操作人、对象和时间。</p>{logs.length === 0 ? <div className="queue-empty">暂无操作记录</div> : logs.slice(0,8).map(log => <article key={log.id}><i/><div><strong>{log.action} · {log.operator}</strong><span>{log.detail}</span><small>{formatDate(log.createdAt)}</small></div></article>)}</section>
+    </div>
   </section>;
 }
 
