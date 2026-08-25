@@ -20,6 +20,8 @@ export const documents = sqliteTable("documents", {
   ownerDepartment: text("owner_department").notNull().default("集团办公室"), securityLevel: text("security_level").notNull().default("内部"),
   permissionScope: text("permission_scope").notNull().default("集团本部"), lifecycleStatus: text("lifecycle_status").notNull().default("effective"),
   trialDataClass: text("trial_data_class").notNull().default("T2-内部脱敏测试"), isTrialData: integer("is_trial_data", { mode: "boolean" }).notNull().default(true),
+  fileName: text("file_name"), storageKey: text("storage_key"), mimeType: text("mime_type"), fileSize: integer("file_size"),
+  parseStatus: text("parse_status").notNull().default("parsed"), indexStatus: text("index_status").notNull().default("ready"),
   knowledgeStatus: text("knowledge_status").notNull().default("pending"), currentVersion: integer("current_version").notNull().default(1),
   createdBy: text("created_by").notNull().default("项目管理员"), createdByUserId: text("created_by_user_id"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
@@ -31,6 +33,16 @@ export const documentVersions = sqliteTable("document_versions", {
   versionStatus: text("version_status").notNull().default("pending"), createdBy: text("created_by").notNull().default("项目管理员"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => [uniqueIndex("document_version_unique").on(table.documentId, table.versionNo), index("document_versions_document_idx").on(table.documentId)]);
+
+export const documentChunks = sqliteTable("document_chunks", {
+  id: text("id").primaryKey(), documentId: text("document_id").notNull(), versionId: text("version_id").notNull(),
+  chunkIndex: integer("chunk_index").notNull(), content: text("content").notNull(), charCount: integer("char_count").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("document_chunk_unique").on(table.versionId, table.chunkIndex),
+  index("document_chunks_document_idx").on(table.documentId),
+  index("document_chunks_version_idx").on(table.versionId),
+]);
 
 export const documentAcl = sqliteTable("document_acl", {
   id: text("id").primaryKey(), documentId: text("document_id").notNull(), subjectType: text("subject_type").notNull(), subjectId: text("subject_id").notNull(),

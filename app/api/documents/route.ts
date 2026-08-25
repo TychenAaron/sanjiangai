@@ -2,6 +2,7 @@ import { desc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { approvals, auditLogs, documentAcl, documents, documentVersions } from "../../../db/schema";
 import { accessError, canReadDocument, requireAccessUser } from "../../../lib/access";
+import { indexDocumentVersion } from "../../../lib/ingestion";
 
 export const runtime = "edge";
 
@@ -55,10 +56,11 @@ export async function POST(request: Request) {
     await db.insert(documentVersions).values({
       id: versionId, documentId, versionNo: 1, content, changeSummary: "首次入库", versionStatus: status, createdBy: operator, createdAt: now,
     });
+    const chunkCount = await indexDocumentVersion(documentId, versionId, content);
     if (status === "pending") await db.insert(approvals).values({ id: approvalId, documentId, versionId, status: "pending", submittedBy: operator, submittedAt: now });
     await db.insert(auditLogs).values({
       id: crypto.randomUUID(), action: status === "pending" ? "提交审核" : "保存草稿", entityType: "document", entityId: documentId,
-      operator, detail: `${title}｜${trialDataClass}｜${securityLevel}｜${permissionScope}｜${ownerDepartment}`, createdAt: now,
+      operator, detail: `${title}｜${trialDataClass}｜${securityLevel}｜${permissionScope}｜${ownerDepartment}｜${chunkCount}个检索片段`, createdAt: now,
     });
 
     const [created] = await db.select().from(documents).where(eq(documents.id, documentId));

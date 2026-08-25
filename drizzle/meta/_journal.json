@@ -15,6 +15,13 @@
       "when": 1787668454411,
       "tag": "0001_nifty_exodus",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787671138471,
+      "tag": "0002_plain_scorpion",
+      "breakpoints": true
     }
   ]
 }

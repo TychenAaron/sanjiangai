@@ -8,12 +8,19 @@ type IconName = "home" | "chat" | "pen" | "policy" | "folder" | "admin" | "searc
 type DocumentRecord = {
   id: string; title: string; documentType: string; sourceType: string; ownerDepartment: string;
   securityLevel: string; permissionScope: string; lifecycleStatus: string; knowledgeStatus: string;
-  trialDataClass: string; isTrialData: boolean; currentVersion: number; createdBy: string; createdByUserId: string | null; createdAt: string; updatedAt: string;
+  trialDataClass: string; isTrialData: boolean; fileName: string | null; parseStatus: string; indexStatus: string;
+  currentVersion: number; createdBy: string; createdByUserId: string | null; createdAt: string; updatedAt: string;
 };
 type DocumentSummary = { total: number; pending: number; approved: number; draft: number };
 type AuditLog = { id: string; action: string; operator: string; detail: string; createdAt: string };
 type DocumentVersion = { id: string; versionNo: number; content: string; changeSummary: string; versionStatus: string; createdBy: string; createdAt: string };
 type SessionUser = { id: string; name: string; email: string; employeeNo: string | null; departmentName: string; role: string; positionLevel: number; clearanceLevel: number; status: string };
+type KnowledgeResult = {
+  answer: string;
+  mode: "qwen" | "extractive" | "no_basis";
+  model: string;
+  citations: Array<{ documentId: string; title: string; version: number; excerpt: string; sourceType: string; score: number }>;
+};
 
 const paths: Record<IconName, React.ReactNode> = {
   home: <><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M9 20v-6h6v6"/></>,
@@ -50,7 +57,10 @@ const policies = [
 export default function Home() {
   const [view, setView] = useState<View>("工作台");
   const [query, setQuery] = useState("");
-  const [answered, setAnswered] = useState(false);
+  const [lastQuestion, setLastQuestion] = useState("");
+  const [knowledgeResult, setKnowledgeResult] = useState<KnowledgeResult | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [askError, setAskError] = useState("");
   const [docType, setDocType] = useState("请示");
   const [records, setRecords] = useState<DocumentRecord[]>([]);
   const [summary, setSummary] = useState<DocumentSummary>({ total: 0, pending: 0, approved: 0, draft: 0 });
@@ -83,11 +93,19 @@ export default function Home() {
     })();
   }, [refreshRecords]);
 
-  function ask(event: FormEvent) {
+  async function ask(event: FormEvent) {
     event.preventDefault();
-    if (!query.trim()) return;
-    setAnswered(true);
+    const question = query.trim();
+    if (!question || asking) return;
     setView("知识问答");
+    setLastQuestion(question); setKnowledgeResult(null); setAskError(""); setAsking(true);
+    try {
+      const response = await fetch("/api/knowledge/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: question }) });
+      const result = await response.json() as KnowledgeResult & { error?: string };
+      if (!response.ok) throw new Error(result.error || "知识检索失败");
+      setKnowledgeResult(result);
+    } catch (error) { setAskError(error instanceof Error ? error.message : "知识检索失败"); }
+    finally { setAsking(false); }
   }
 
   return (
@@ -96,7 +114,7 @@ export default function Home() {
         <div className="brand"><b>三江</b><span><strong>集团AI工作台</strong><small>知识与公文智能助手</small></span></div>
         <nav aria-label="主导航">
           <p>员工应用</p>
-          {nav.map(item => <button key={item.label} className={view === item.label ? "active" : ""} onClick={() => { setView(item.label); setAnswered(false); }}><Icon name={item.icon}/><span>{item.label}</span></button>)}
+          {nav.map(item => <button key={item.label} className={view === item.label ? "active" : ""} onClick={() => setView(item.label)}><Icon name={item.icon}/><span>{item.label}</span></button>)}
           <p className="admin-label">平台管理</p>
           <button className={view === "权限中心" ? "active" : ""} onClick={() => setView("权限中心")}><Icon name="shield"/><span>权限中心</span></button>
           {canOpenAdmin && <button className={view === "管理后台" ? "active" : ""} onClick={() => setView("管理后台")}><Icon name="admin"/><span>管理后台</span></button>}
@@ -110,7 +128,7 @@ export default function Home() {
         <div className="content">
           {sessionError && <div className="access-blocked"><Icon name="shield" size={30}/><h2>当前账号暂不能进入资料库</h2><p>{sessionError}</p><span>请由系统管理员在“权限中心”按登录邮箱配置员工级别、部门和数据权限。</span></div>}
           {!sessionError && view === "工作台" && <Dashboard greeting={greeting} userName={currentUser?.name || "员工"} query={query} setQuery={setQuery} ask={ask} docType={docType} setDocType={setDocType} go={setView} records={records} summary={summary} dataLoading={dataLoading}/>} 
-          {!sessionError && view === "知识问答" && <Knowledge query={query} setQuery={setQuery} answered={answered} ask={ask}/>} 
+          {!sessionError && view === "知识问答" && <Knowledge query={query} setQuery={setQuery} lastQuestion={lastQuestion} result={knowledgeResult} asking={asking} error={askError} ask={ask}/>} 
           {!sessionError && view === "政策中心" && <PolicyCenter/>}
           {!sessionError && view === "公文写作" && <Writing docType={docType} setDocType={setDocType}/>} 
           {!sessionError && view === "我的资料" && <Library user={currentUser} records={records} loading={dataLoading} error={dataError} refresh={refreshRecords}/>} 
@@ -164,12 +182,20 @@ function Dashboard({ greeting, userName, query, setQuery, ask, docType, setDocTy
   </>;
 }
 
-function Knowledge({ query, setQuery, answered, ask }: { query: string; setQuery: (v:string)=>void; answered:boolean; ask:(e:FormEvent)=>void }) {
+function Knowledge({ query, setQuery, lastQuestion, result, asking, error, ask }: {
+  query: string; setQuery: (v:string)=>void; lastQuestion: string; result: KnowledgeResult | null; asking: boolean; error: string; ask:(e:FormEvent)=>void;
+}) {
   return <section className="page">
     <PageTitle kicker="集团知识库" title="知识问答" text="只依据员工有权查看的正式资料回答，并显示来源、版本和原文片段。"/>
+    <div className="retrieval-status"><span><i/>权限检索已启用</span><span><i/>全文检索已启用</span><span className="waiting"><i/>Qwen3.8-27B等待云端地址</span></div>
     <div className="chat-panel">
-      {!answered ? <div className="empty"><i><Icon name="chat" size={30}/></i><h2>您想查询什么？</h2><p>系统会先核验权限，再检索OA文件、最终定稿和已审核政策。</p></div> :
-      <div className="conversation"><div className="question">{query}</div><div className="answer"><i>AI</i><div><p>根据当前试点知识库，相关事项应先由承办部门形成申请材料，完成部门负责人审核后，按照事项类别进入相应决策程序。</p><p>涉及重大采购的，应同步完成合规审查并保留完整审批记录。具体金额和流程需以最新制度原文为准。</p><section><strong>引用依据</strong><button>《三江集团采购管理办法（2026版）》第12—16条</button><button>《重大事项决策管理制度》第8条</button></section></div></div></div>}
+      {!lastQuestion && !asking ? <div className="empty"><i><Icon name="chat" size={30}/></i><h2>您想查询什么？</h2><p>请先上传并审核一份脱敏资料。系统会先核验账号权限，再检索正式知识。</p></div> :
+      <div className="conversation"><div className="question">{lastQuestion}</div>
+        {asking && <div className="answer loading-answer"><i>AI</i><div><p>正在进行账号权限过滤和资料检索……</p></div></div>}
+        {error && <div className="answer"><i>!</i><div><p>{error}</p></div></div>}
+        {result && <div className="answer"><i>AI</i><div><div className={`answer-mode ${result.mode}`}>{result.mode === "qwen" ? `${result.model}生成` : result.mode === "extractive" ? "原文检索模式" : "无可靠依据"}</div>{result.answer.split("\n").filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+          {result.citations.length > 0 && <section><strong>引用依据（均已通过当前账号权限校验）</strong>{result.citations.map((citation, index) => <article className="citation" key={`${citation.documentId}-${index}`}><button>[{index + 1}]《{citation.title}》V{citation.version}.0 · {citation.sourceType}</button><p>{citation.excerpt}</p></article>)}</section>}</div></div>}
+      </div>}
       <form className="chat-input" onSubmit={ask}><input value={query} onChange={e => setQuery(e.target.value)} placeholder="输入问题，按回车发送"/><button aria-label="发送"><Icon name="send"/></button></form>
     </div>
   </section>;
@@ -213,6 +239,8 @@ function formatDate(value: string) {
 
 function Library({ user, records, loading, error, refresh }: { user: SessionUser | null; records: DocumentRecord[]; loading: boolean; error: string; refresh: () => Promise<void> }) {
   const [adding, setAdding] = useState(false);
+  const [ingestMode, setIngestMode] = useState<"file" | "text">("file");
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
   const [selected, setSelected] = useState<DocumentRecord | null>(null);
@@ -224,6 +252,7 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
 
   function setField(name: string, value: string) { setForm(previous => ({ ...previous, [name]: value })); }
   async function save(submitMode: "draft" | "pending") {
+    if (ingestMode === "file") { await saveUpload(); return; }
     if (!form.title.trim() || !form.content.trim()) { setNotice("请先填写文件名称和正文内容。"); return; }
     setSaving(true); setNotice("");
     try {
@@ -234,6 +263,26 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
       setNotice(submitMode === "draft" ? "草稿已保存，系统已生成V1.0版本记录。" : "资料已提交审核，审核通过后才会进入正式知识库。");
       await refresh();
     } catch (e) { setNotice(e instanceof Error ? e.message : "保存失败"); }
+    finally { setSaving(false); }
+  }
+
+  async function saveUpload() {
+    if (!uploadFile) { setNotice("请先选择一个脱敏文件。"); return; }
+    if (!form.title.trim()) { setNotice("请填写文件名称。"); return; }
+    if (!form.confirmedDesensitized) { setNotice("请先勾选脱敏确认。"); return; }
+    setSaving(true); setNotice("");
+    try {
+      const payload = new FormData();
+      payload.set("file", uploadFile); payload.set("title", form.title); payload.set("documentType", form.documentType);
+      payload.set("ownerDepartment", form.ownerDepartment); payload.set("securityLevel", form.securityLevel);
+      payload.set("permissionScope", form.permissionScope); payload.set("trialDataClass", form.trialDataClass); payload.set("confirmedDesensitized", "true");
+      const response = await fetch("/api/documents/upload", { method: "POST", body: payload });
+      const result = await response.json() as { error?: string; chunkCount?: number };
+      if (!response.ok) throw new Error(result.error || "上传失败");
+      setUploadFile(null); setForm({ ...form, title: "", content: "", confirmedDesensitized: false }); setAdding(false);
+      setNotice(`文件已经保存并解析为${result.chunkCount || 0}个检索片段，审核通过后即可用于知识问答。`);
+      await refresh();
+    } catch (error) { setNotice(error instanceof Error ? error.message : "上传失败"); }
     finally { setSaving(false); }
   }
 
@@ -265,18 +314,20 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
     {notice && <div className="notice">{notice}</div>}
     {adding && <div className="panel ingest-form">
       <div className="trial-rule"><Icon name="shield" size={18}/><div><strong>当前为试用数据入口</strong><span>只允许公开资料、内部脱敏测试资料和部门隔离测试资料；真实敏感资料与禁止项不得上传。</span></div></div>
+      <div className="ingest-mode"><button className={ingestMode === "file" ? "active" : ""} onClick={() => setIngestMode("file")}>上传文件</button><button className={ingestMode === "text" ? "active" : ""} onClick={() => setIngestMode("text")}>粘贴正文</button><span>{ingestMode === "file" ? "本关支持Word（.docx）、TXT和Markdown，PDF/扫描件将在OCR关接入。" : "适合快速粘贴一小段脱敏制度进行测试。"}</span></div>
+      {ingestMode === "file" && <label className="file-drop"><input type="file" accept=".docx,.txt,.md" onChange={event => { const file = event.target.files?.[0] || null; setUploadFile(file); if (file && !form.title) setField("title", file.name.replace(/\.[^.]+$/, "")); }}/><Icon name="folder" size={24}/><span><strong>{uploadFile ? uploadFile.name : "选择脱敏文件"}</strong><small>{uploadFile ? `${(uploadFile.size / 1024).toFixed(1)} KB` : "单个文件不超过8MB"}</small></span></label>}
       <div className="form-grid">
         <label><span>文件名称 *</span><input value={form.title} onChange={e => setField("title", e.target.value)} placeholder="例如：集团采购管理办法（试行）"/></label>
         <label><span>试用数据类别 *</span><select value={form.trialDataClass} onChange={e => { const value = e.target.value; setField("trialDataClass", value); if (value === "T1-公开资料") { setField("securityLevel", "公开"); setField("permissionScope", "公司全员"); } if (value === "T3-部门隔离测试") setField("permissionScope", "责任部门"); }}><option>T1-公开资料</option><option>T2-内部脱敏测试</option><option>T3-部门隔离测试</option></select></label>
         <label><span>文件类型</span><select value={form.documentType} onChange={e => setField("documentType", e.target.value)}><option>制度文件</option><option>通知</option><option>请示</option><option>工作情况汇报</option><option>会议纪要</option><option>政策文件</option><option>其他资料</option></select></label>
-        <label><span>数据来源</span><select value={form.sourceType} onChange={e => setField("sourceType", e.target.value)}><option>人工录入</option><option>OA批量导出</option><option>AI生成定稿</option><option>政府官网</option></select></label>
+        <label><span>数据来源</span><select disabled={ingestMode === "file"} value={ingestMode === "file" ? "文件上传" : form.sourceType} onChange={e => setField("sourceType", e.target.value)}><option>文件上传</option><option>人工录入</option><option>OA批量导出</option><option>AI生成定稿</option><option>政府官网</option></select></label>
         <label><span>责任部门</span><select value={form.ownerDepartment} onChange={e => setField("ownerDepartment", e.target.value)}><option>集团办公室</option><option>科技与信息化部门</option><option>财务管理部</option><option>运营管理部</option><option>所属子公司</option></select></label>
         <label><span>数据级别</span><select disabled={form.trialDataClass === "T1-公开资料"} value={form.securityLevel} onChange={e => setField("securityLevel", e.target.value)}><option>公开</option><option>内部</option>{(user?.clearanceLevel || 0) >= 3 && <option>敏感</option>}</select></label>
         <label><span>可查看范围</span><select disabled={form.trialDataClass === "T1-公开资料" || form.trialDataClass === "T3-部门隔离测试"} value={form.permissionScope} onChange={e => setField("permissionScope", e.target.value)}><option>公司全员</option><option>集团本部</option><option>责任部门</option><option>领导班子</option><option>指定人员</option></select></label>
       </div>
-      <label className="content-field"><span>正文内容 *</span><textarea value={form.content} onChange={e => setField("content", e.target.value)} placeholder="本关先粘贴一小段脱敏测试正文。后续接入OA批量同步和文件上传。"/></label>
+      {ingestMode === "text" && <label className="content-field"><span>正文内容 *</span><textarea value={form.content} onChange={e => setField("content", e.target.value)} placeholder="粘贴一小段脱敏测试正文。系统会自动切分成可检索片段。"/></label>}
       <label className="confirm-check"><input type="checkbox" checked={form.confirmedDesensitized} onChange={e => setForm(previous => ({ ...previous, confirmedDesensitized: e.target.checked }))}/><span>我确认该资料已经脱敏，不含真实财务明细、员工隐私、客户个人信息、账号密码、密钥、未公开合同价格及涉密内容。</span></label>
-      <div className="form-actions"><small>系统将登录账号、部门、员工级别、数据级别和查看范围共同用于权限判断。</small><button disabled={saving} onClick={() => void save("draft")}>保存草稿</button><button disabled={saving} className="submit" onClick={() => void save("pending")}>{saving ? "正在保存…" : "保存并提交审核"}</button></div>
+      <div className="form-actions"><small>系统将登录账号、部门、员工级别、数据级别和查看范围共同用于权限判断。</small>{ingestMode === "text" && <button disabled={saving} onClick={() => void save("draft")}>保存草稿</button>}<button disabled={saving} className="submit" onClick={() => void save("pending")}>{saving ? "正在处理…" : ingestMode === "file" ? "上传、解析并提交审核" : "保存并提交审核"}</button></div>
     </div>}
     {error && <div className="notice error">数据库暂时无法读取：{error}</div>}
     <div className="panel library-table"><div className="table-head"><span>文件名称</span><span>来源</span><span>版本</span><span>知识状态</span><span>更新时间</span></div>
@@ -318,7 +369,7 @@ function Admin({ records, summary, refresh }: { records: DocumentRecord[]; summa
       ["数据来源","OA同步、人工录入、政府官网监测",`${summary.total}份资料`],
       ["资料审核","新文件审核、版本确认、失效处理",`${summary.pending}项待处理`],
       ["用户与权限","部门、角色、知识库和文件权限","数据表已建立"],
-      ["模型管理","DeepSeek、向量模型、重排模型","第三关接入"],
+      ["模型管理","Qwen3.8-27B＋Embedding＋Reranker＋OCR","模型网关已预留"],
       ["公文模板","请示、通知、工作情况汇报","3个现行模板"],
       ["审计日志","入库、审核、同步和配置记录",`${logs.length}条记录`],
       ["业务扩展中心","财务、运营及其他业务模块的接口与权限","已预留"],

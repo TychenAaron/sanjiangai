@@ -2,6 +2,7 @@ import { desc, eq } from "drizzle-orm";
 import { getDb } from "../../../../../db";
 import { approvals, auditLogs, documentAcl, documents, documentVersions } from "../../../../../db/schema";
 import { accessError, canEditDocument, canReadDocument, requireAccessUser } from "../../../../../lib/access";
+import { indexDocumentVersion } from "../../../../../lib/ingestion";
 
 export const runtime = "edge";
 
@@ -36,6 +37,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const versionId = crypto.randomUUID();
     const operator = user.name;
     await db.insert(documentVersions).values({ id: versionId, documentId: id, versionNo: nextVersion, content, changeSummary: body.changeSummary?.trim() || "人工修改", versionStatus: "pending", createdBy: operator, createdAt: now });
+    await indexDocumentVersion(id, versionId, content);
     await db.update(documents).set({ currentVersion: nextVersion, knowledgeStatus: "pending", updatedAt: now }).where(eq(documents.id, id));
     await db.insert(approvals).values({ id: crypto.randomUUID(), documentId: id, versionId, status: "pending", submittedBy: operator, submittedAt: now });
     await db.insert(auditLogs).values({ id: crypto.randomUUID(), action: "提交新版本", entityType: "document", entityId: id, operator, detail: `${document.title}｜V${nextVersion}.0｜${body.changeSummary?.trim() || "人工修改"}`, createdAt: now });

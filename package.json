@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
+    "fflate": "^0.8.2",
     "next": "16.2.6",
     "react": "19.2.6",
     "react-dom": "19.2.6"
@@ -39,5 +40,5 @@
     "wrangler": "4.92.0"
   },
   "type": "module",
-  "displayName": "\u4e09\u6c5f\u96c6\u56e2AI\u77e5\u8bc6\u5de5\u4f5c\u53f0"
+  "displayName": "三江集团AI知识工作台"
 }
