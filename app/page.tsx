@@ -18,9 +18,9 @@ type DocumentVersion = { id: string; versionNo: number; content: string; changeS
 type SessionUser = { id: string; name: string; email: string; employeeNo: string | null; departmentName: string; role: string; positionLevel: number; clearanceLevel: number; status: string };
 type KnowledgeResult = {
   answer: string;
-  mode: "qwen" | "extractive" | "no_basis";
+  mode: "model" | "extractive" | "no_basis";
   model: string;
-  citations: Array<{ documentId: string; title: string; version: number; excerpt: string; sourceType: string; score: number }>;
+  citations: Array<{ documentId: string; title: string; version: number; excerpt: string; sourceType: string; chunkIndex: number; location: string; score: number }>;
 };
 type SearchResult = {
   documentId: string; title: string; documentType: string; sourceType: string; ownerDepartment: string;
@@ -251,8 +251,8 @@ function Knowledge({ query, setQuery, lastQuestion, result, asking, error, ask }
       <div className="conversation"><div className="question">{lastQuestion}</div>
         {asking && <div className="answer loading-answer"><i>AI</i><div><p>正在进行账号权限过滤和资料检索……</p></div></div>}
         {error && <div className="answer"><i>!</i><div><p>{error}</p></div></div>}
-        {result && <div className="answer"><i>AI</i><div><div className={`answer-mode ${result.mode}`}>{result.mode === "qwen" ? `${result.model}生成` : result.mode === "extractive" ? "原文检索模式" : "无可靠依据"}</div>{result.answer.split("\n").filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
-          {result.citations.length > 0 && <section><strong>引用依据（均已通过当前账号权限校验）</strong>{result.citations.map((citation, index) => <article className="citation" key={`${citation.documentId}-${index}`}><button>[{index + 1}]《{citation.title}》V{citation.version}.0 · {citation.sourceType}</button><p>{citation.excerpt}</p></article>)}</section>}</div></div>}
+          {result && <div className="answer"><i>AI</i><div><div className={`answer-mode ${result.mode}`}>{result.mode === "model" ? "依据问答" : result.mode === "extractive" ? "原文摘录" : "暂无可靠依据"}</div>{result.answer.split("\n").filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+          {result.citations.length > 0 && <section><strong>引用依据（均已通过当前账号权限校验）</strong>{result.citations.map((citation, index) => <article className="citation" key={`${citation.documentId}-${index}`}><button>[{index + 1}]《{citation.title}》V{citation.version}.0 · {citation.sourceType} · {citation.location}</button><p>{citation.excerpt}</p></article>)}</section>}</div></div>}
       </div>}
       <form className="chat-input" onSubmit={ask}><input value={query} onChange={e => setQuery(e.target.value)} placeholder="输入问题，按回车发送"/><button aria-label="发送"><Icon name="send"/></button></form>
     </div>

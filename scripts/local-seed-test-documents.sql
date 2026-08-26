@@ -36,3 +36,14 @@ ON CONFLICT(id) DO UPDATE SET
   created_by = excluded.created_by,
   created_by_user_id = excluded.created_by_user_id,
   updated_at = CURRENT_TIMESTAMP;
+
+-- 以下两条分片仅用于验证本机关键词问答的可靠依据门槛和“第 N 段”引用定位，不包含真实文件或业务内容。
+INSERT OR REPLACE INTO document_versions (id, document_id, version_no, content, change_summary, version_status, created_by, created_at)
+VALUES
+  ('local-version-public', 'local-doc-public', 1, 'LOCAL_PUBLIC_KNOWLEDGE_EVIDENCE：本机虚构公开测试资料，用于验证可靠依据门槛和分片定位。', '本机虚构问答验证资料', 'approved', '本地测试管理员', CURRENT_TIMESTAMP),
+  ('local-version-confidential', 'local-doc-confidential', 1, 'ZXCVB9876：本机虚构机密测试资料，仅系统管理员可用于验证权限过滤。', '本机虚构问答验证资料', 'approved', '本地测试管理员', CURRENT_TIMESTAMP);
+
+INSERT OR REPLACE INTO document_chunks (id, document_id, version_id, chunk_index, content, char_count, created_at)
+VALUES
+  ('local-chunk-public-0', 'local-doc-public', 'local-version-public', 0, 'LOCAL_PUBLIC_KNOWLEDGE_EVIDENCE：本机虚构公开测试资料，用于验证可靠依据门槛和分片定位。', length('LOCAL_PUBLIC_KNOWLEDGE_EVIDENCE：本机虚构公开测试资料，用于验证可靠依据门槛和分片定位。'), CURRENT_TIMESTAMP),
+  ('local-chunk-confidential-0', 'local-doc-confidential', 'local-version-confidential', 0, 'ZXCVB9876：本机虚构机密测试资料，仅系统管理员可用于验证权限过滤。', length('ZXCVB9876：本机虚构机密测试资料，仅系统管理员可用于验证权限过滤。'), CURRENT_TIMESTAMP);

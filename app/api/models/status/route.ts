@@ -6,10 +6,11 @@ export const runtime = "edge";
 export async function GET(request: Request) {
   try {
     await requireAccessUser(request);
+    const gateway = modelGatewayStatus();
     return Response.json({
-      gateway: modelGatewayStatus(),
+      gateway,
       services: [
-        { name: "Qwen3.8-27B", purpose: "知识问答、公文写作、政策解读", status: modelGatewayStatus().configured ? "已连接" : "等待云端地址" },
+        { name: gateway.model, purpose: "知识问答依据回答", status: gateway.configured ? "已配置，可在引用约束下尝试调用" : "未配置，系统将使用原文摘录模式" },
         { name: "Qwen3-Embedding-4B", purpose: "语义向量检索", status: "下一阶段接入" },
         { name: "Qwen3-Reranker-4B", purpose: "检索结果重排", status: "下一阶段接入" },
         { name: "PaddleOCR-VL", purpose: "PDF和扫描件识别", status: "OCR阶段接入" },
