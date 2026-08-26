@@ -57,6 +57,24 @@ function isConfidentialDocument(securityLevel: string) {
   return securityLevel === "confidential" || securityLevel === "机密";
 }
 
+// 说明：判断账号能否通过当前在线入口提交指定密级的资料。
+// 输入是已由认证入口确认的账号、资料密级与责任部门，输出是是否允许进入上传流程。
+// 公开和内部资料都属于基础资料级别；敏感资料仍需同时满足角色、数据级别和责任部门规则；机密资料始终拒绝，必须走后续专用流程。
+export function canUploadDocument(
+  user: AccessUserLike,
+  securityLevel: string,
+  ownerDepartment: string,
+) {
+  if (isConfidentialDocument(securityLevel)) return false;
+  if (getSecurityTier(securityLevel) <= 1) return user.clearanceLevel >= 1;
+  if (!isSensitiveDocument(securityLevel) || user.clearanceLevel < 2) return false;
+
+  return (
+    new Set(["department_head", "group_leader", "knowledge_admin", "system_admin"]).has(user.role) &&
+    (user.role === "system_admin" || user.departmentName === ownerDepartment)
+  );
+}
+
 // 说明：这是资料读取权限的核心判断函数。
 // 输入是当前用户、目标资料和可选的单独授权记录，输出是当前用户是否可以读取该资料。
 // 它继续使用角色、部门、岗位级别、数据级别和 document_acl 判断，不能通过邮件地址直接放权。
@@ -162,6 +180,9 @@ export function canReviewDocument(
   document: AccessDocument,
   grants: AccessGrant[] = [],
 ) {
+  // 说明：系统管理员承担全局审核职责，可审核任何待审核资料；这不改变普通员工读取或审核权限。
+  if (user.role === "system_admin" && document.knowledgeStatus === "pending") return true;
+
   const direct = grants.find(
     (grant) =>
       grant.documentId === document.id &&

@@ -16,7 +16,8 @@
     "db:migrate:local": "wrangler d1 migrations apply DB --local --config wrangler.local.toml",
     "db:seed:local:test-users": "wrangler d1 execute DB --local --config wrangler.local.toml --file scripts/local-seed-test-users.sql",
     "db:seed:local:test-documents": "wrangler d1 execute DB --local --config wrangler.local.toml --file scripts/local-seed-test-documents.sql",
-    "verify:local:test-access": "node --experimental-strip-types scripts/verify-local-test-access.ts"
+    "verify:local:test-access": "node --experimental-strip-types scripts/verify-local-test-access.ts",
+    "verify:local:upload-flow": "node --experimental-strip-types scripts/verify-local-upload-flow.ts"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

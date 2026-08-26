@@ -3,13 +3,14 @@ import { getDb } from "../db";
 import { departments, users } from "../db/schema";
 import {
   canEditDocument,
+  canUploadDocument,
   canReadDocument,
   canReviewDocument,
   type AccessDocument,
   type AccessGrant,
 } from "./document-access";
 
-export { canEditDocument, canReadDocument, canReviewDocument };
+export { canEditDocument, canReadDocument, canReviewDocument, canUploadDocument };
 export type { AccessDocument, AccessGrant };
 
 export type AccessUser = typeof users.$inferSelect;

@@ -2,15 +2,21 @@ import { env } from "cloudflare:workers";
 import { eq } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { approvals, auditLogs, documents, documentVersions } from "../../../../db/schema";
-import { accessError, requireAccessUser } from "../../../../lib/access";
+import { accessError, canUploadDocument, requireAccessUser } from "../../../../lib/access";
 import { extractUpload, indexDocumentVersion, safeStorageName } from "../../../../lib/ingestion";
 import { findBlockedMatches } from "../../../../lib/upload-control";
 
 export const runtime = "edge";
 
-type Bucket = { put: (key: string, value: ArrayBuffer, options?: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> }) => Promise<unknown> };
+type Bucket = {
+  put: (key: string, value: ArrayBuffer, options?: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> }) => Promise<unknown>;
+  delete: (key: string) => Promise<unknown>;
+};
 
 export async function POST(request: Request) {
+  let bucket: Bucket | undefined;
+  let storageKey: string | undefined;
+  let storageWritten = false;
   try {
     const user = await requireAccessUser(request);
     const form = await request.formData();
@@ -20,12 +26,21 @@ export async function POST(request: Request) {
 
     const trialDataClass = String(form.get("trialDataClass") || "T2-内部脱敏测试");
     if (!new Set(["T1-公开资料", "T2-内部脱敏测试", "T3-部门隔离测试"]).has(trialDataClass)) return Response.json({ error: "试用数据类别不符合标准" }, { status: 400 });
-    let securityLevel = String(form.get("securityLevel") || "内部");
+    const requestedSecurityLevel = String(form.get("securityLevel") || "内部");
+    // 说明：机密资料不得进入当前在线上传链路，所有账号都必须转入后续机密资料专用流程。
+    if (requestedSecurityLevel === "机密" || requestedSecurityLevel === "confidential") {
+      return Response.json({ error: "机密资料不得通过当前在线上传入口提交，应按后续机密资料专用流程处理" }, { status: 403 });
+    }
+
+    let securityLevel = requestedSecurityLevel;
     let permissionScope = String(form.get("permissionScope") || "责任部门");
     if (trialDataClass === "T1-公开资料") { securityLevel = "公开"; permissionScope = "公司全员"; }
     if (trialDataClass === "T3-部门隔离测试") permissionScope = "责任部门";
-    const level = ({ "公开": 1, "内部": 2, "敏感": 3 } as Record<string, number>)[securityLevel];
-    if (!level || level > user.clearanceLevel) return Response.json({ error: "当前账号无权上传该数据级别" }, { status: 403 });
+    const ownerDepartment = user.positionLevel >= 4 ? String(form.get("ownerDepartment") || user.departmentName) : user.departmentName;
+    // 说明：上传与读取共用角色、部门和数据级别规则，不能通过邮箱或前端字段绕过敏感资料限制。
+    if (!canUploadDocument(user, securityLevel, ownerDepartment)) {
+      return Response.json({ error: "当前账号无权上传该数据级别或责任部门的资料" }, { status: 403 });
+    }
 
     const { buffer, content } = await extractUpload(file);
     const title = String(form.get("title") || file.name.replace(/\.[^.]+$/, "")).trim();
@@ -41,17 +56,18 @@ export async function POST(request: Request) {
       return Response.json({ error: `文件命中后台禁止上传规则（${[...new Set(blocked.map(item => item.category))].join("、")}），原文件未保存，请联系管理员。` }, { status: 400 });
     }
     const runtime = env as unknown as { BUCKET?: Bucket };
-    if (!runtime.BUCKET) throw new Error("文件存储尚未启用");
+    bucket = runtime.BUCKET;
+    if (!bucket) throw new Error("文件存储尚未启用");
 
     const now = new Date().toISOString();
     const documentId = crypto.randomUUID();
     const versionId = crypto.randomUUID();
-    const storageKey = `trial/${now.slice(0, 10)}/${documentId}/${safeStorageName(file.name)}`;
-    const ownerDepartment = user.positionLevel >= 4 ? String(form.get("ownerDepartment") || user.departmentName) : user.departmentName;
-    await runtime.BUCKET.put(storageKey, buffer, {
+    storageKey = `trial/${now.slice(0, 10)}/${documentId}/${safeStorageName(file.name)}`;
+    await bucket.put(storageKey, buffer, {
       httpMetadata: { contentType: file.type || "application/octet-stream" },
       customMetadata: { uploadedBy: user.id, trialDataClass },
     });
+    storageWritten = true;
 
     await db.insert(documents).values({
       id: documentId, title, documentType: String(form.get("documentType") || "其他资料"), sourceType: "文件上传",
@@ -70,5 +86,25 @@ export async function POST(request: Request) {
     });
     const [created] = await db.select().from(documents).where(eq(documents.id, documentId));
     return Response.json({ document: created, chunkCount }, { status: 201 });
-  } catch (error) { return accessError(error, "上传文件失败"); }
+  } catch (error) {
+    // 说明：R2 已写入但后续任一 D1 步骤失败时，只删除本次刚生成的唯一存储键，避免遗留孤儿文件。
+    // 删除和失败审计均为尽力操作，绝不按前缀批量删除或触碰已有对象。
+    if (storageWritten && bucket && storageKey) {
+      try {
+        await bucket.delete(storageKey);
+        try {
+          const now = new Date().toISOString();
+          await getDb().insert(auditLogs).values({
+            id: crypto.randomUUID(), action: "上传失败回滚本机存储", entityType: "upload_control", entityId: storageKey,
+            operator: "系统", detail: `已删除本次上传对象：${storageKey}`, createdAt: now,
+          });
+        } catch {
+          // 数据库故障时无法写审计，但 R2 回滚结果仍不能影响原始错误返回。
+        }
+      } catch {
+        // R2 不可用时保留原始失败原因；不执行任何可能误删其他对象的补救动作。
+      }
+    }
+    return accessError(error, "上传文件失败");
+  }
 }
