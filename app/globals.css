@@ -442,6 +442,32 @@ button { cursor: pointer; }
 .current-account p { margin: 0; color: var(--muted); font-size: 8px; }
 .account-tags { display: flex; gap: 6px; }
 .account-tags em { padding: 5px 8px; border-radius: 999px; background: #edf3f7; color: var(--navy); font-size: 8px; font-style: normal; }
+.local-test-panel { margin-top: 13px; padding: 17px; border: 1px solid #efc871; background: #fffaf0; }
+.local-test-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.local-test-head p { margin: 0; color: #a6473d; font-size: 8px; font-weight: 800; }
+.local-test-head h2 { margin: 4px 0; color: #6d4520; font-size: 13px; }
+.local-test-head span { color: #876b49; font-size: 8px; }
+.local-test-head > b { padding: 5px 8px; border-radius: 999px; background: #a6473d; color: white; font-size: 7px; letter-spacing: .08em; }
+.local-test-current { margin-top: 13px; padding: 11px 12px; border-radius: 8px; background: #fff; }
+.local-test-current strong, .local-test-current span, .local-test-current small { display: block; }
+.local-test-current strong { color: var(--navy); font-size: 10px; }
+.local-test-current span { margin-top: 4px; color: #5f6973; font-size: 8px; }
+.local-test-current small { margin-top: 4px; color: #9b6b2e; font-size: 7px; }
+.local-test-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 11px; }
+.local-test-actions button, .local-test-restore button { padding: 9px; border: 1px solid #e3b75b; border-radius: 7px; background: white; color: #704820; text-align: left; }
+.local-test-actions button:hover, .local-test-restore button:hover { border-color: #a6473d; background: #fff4de; }
+.local-test-actions button:disabled, .local-test-restore button:disabled { cursor: wait; opacity: .65; }
+.local-test-actions strong, .local-test-actions span { display: block; }
+.local-test-actions strong { font-size: 8px; }
+.local-test-actions span { margin-top: 3px; color: #876b49; font-size: 7px; }
+.local-test-restore { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 11px; padding: 10px 12px; border-radius: 8px; background: #fff4de; color: #876b49; font-size: 8px; }
+.local-test-restore button { flex: 0 0 auto; background: #a6473d; border-color: #a6473d; color: white; font-size: 8px; }
+.local-test-levels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin-top: 11px; }
+.local-test-levels span { padding: 8px; border-radius: 7px; background: #fff; }
+.local-test-levels b, .local-test-levels small { display: block; }
+.local-test-levels b { color: #6d4520; font-size: 8px; }
+.local-test-levels small { margin-top: 3px; color: #876b49; font-size: 7px; }
+.local-test-notice { margin-bottom: 0; border-color: #efc871; background: #fff4de; color: #876b49; }
 .access-formula { display: flex; align-items: center; gap: 11px; margin: 13px 0; padding: 14px 17px; border-radius: 9px; background: var(--navy); color: white; }
 .access-formula strong, .access-formula span { display: block; }
 .access-formula strong { font-size: 10px; }
@@ -477,6 +503,7 @@ button { cursor: pointer; }
   .resource-capabilities { grid-template-columns: repeat(3,1fr); }
   .architecture-flow { grid-template-columns: repeat(2,1fr); }
   .account-form { grid-template-columns: repeat(2,1fr); }
+  .local-test-actions, .local-test-levels { grid-template-columns: repeat(2,1fr); }
   .rule-form { grid-template-columns: repeat(2,1fr); }
   .watch-sites { display: none; }
 }
@@ -524,6 +551,8 @@ button { cursor: pointer; }
   .standard-table > div, .standard-table article, .role-table > div, .role-table article { min-width: 700px; }
   .user-list > div, .user-list article { min-width: 620px; }
   .account-form { grid-template-columns: 1fr; }
+  .local-test-head, .local-test-restore { align-items: flex-start; flex-direction: column; }
+  .local-test-actions, .local-test-levels { grid-template-columns: 1fr; }
   .rule-form { grid-template-columns: 1fr; }
   .rule-list { overflow-x: auto; }
   .rule-list > div, .rule-list article { min-width: 700px; }

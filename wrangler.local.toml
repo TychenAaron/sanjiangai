@@ -1,0 +1,13 @@
+# 本文件仅用于 Windows 本机开发时初始化和检查本地 D1 数据库。
+# 所有命令都必须显式携带 --local，严禁把本文件用于生产部署或线上数据库操作。
+
+name = "sanjiang-ai-workbench-local"
+main = "./worker/index.ts"
+compatibility_date = "2026-08-26"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "site-creator-d1"
+database_id = "00000000-0000-4000-8000-000000000000"
+migrations_dir = "drizzle"

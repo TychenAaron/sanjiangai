@@ -26,6 +26,8 @@ type SearchResult = {
   documentId: string; title: string; documentType: string; sourceType: string; ownerDepartment: string;
   securityLevel: string; version: number; excerpt: string; score: number;
 };
+type LocalTestAccount = { key: "admin" | "staff" | "manager" | "finance"; email: string; name: string };
+type LocalTestAccountRecord = SessionUser & { readableLevels: string[] };
 
 const paths: Record<IconName, React.ReactNode> = {
   home: <><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M9 20v-6h6v6"/></>,
@@ -90,14 +92,26 @@ export default function Home() {
     finally { setDataLoading(false); }
   }, []);
 
-  useEffect(() => {
-    void (async () => {
-      const response = await fetch("/api/session", { cache: "no-store" });
-      const result = await response.json() as { user?: SessionUser; error?: string };
-      if (response.ok && result.user) { setCurrentUser(result.user); setSessionError(""); await refreshRecords(); }
-      else { setSessionError(result.error || "无法识别登录账号"); setDataLoading(false); }
-    })();
+  // 说明：切换本机测试身份后重新读取服务端会话和资料列表。
+  // 输入为空，输出是更新后的当前账号和已按权限过滤的资料；正式登录流程也复用同一读取方式。
+  const refreshSessionAndRecords = useCallback(async () => {
+    const response = await fetch("/api/session", { cache: "no-store" });
+    const result = await response.json() as { user?: SessionUser; error?: string };
+    if (response.ok && result.user) {
+      setCurrentUser(result.user);
+      setSessionError("");
+      await refreshRecords();
+    } else {
+      setCurrentUser(null);
+      setSessionError(result.error || "无法识别登录账号");
+      setDataLoading(false);
+    }
   }, [refreshRecords]);
+
+  useEffect(() => {
+    const refreshTimer = window.setTimeout(() => { void refreshSessionAndRecords(); }, 0);
+    return () => window.clearTimeout(refreshTimer);
+  }, [refreshSessionAndRecords]);
 
   async function ask(event: FormEvent) {
     event.preventDefault();
@@ -141,7 +155,7 @@ export default function Home() {
           {!sessionError && view === "智能写作" && <Writing docType={docType} setDocType={setDocType}/>} 
           {!sessionError && view === "知识资源" && <Library user={currentUser} records={records} loading={dataLoading} error={dataError} refresh={refreshRecords}/>} 
           {!sessionError && view === "建设总览" && canOpenAdmin && <ProjectOverview/>}
-          {!sessionError && view === "权限中心" && <AccessCenter user={currentUser}/>} 
+          {!sessionError && view === "权限中心" && <AccessCenter user={currentUser} refreshSessionAndRecords={refreshSessionAndRecords}/>}
           {!sessionError && view === "治理后台" && canOpenAdmin && <Admin user={currentUser} records={records} summary={summary} refresh={refreshRecords}/>} 
         </div>
       </section>
@@ -519,12 +533,18 @@ function Admin({ user, records, summary, refresh }: { user: SessionUser | null; 
   </section>;
 }
 
-function AccessCenter({ user }: { user: SessionUser | null }) {
+function AccessCenter({ user, refreshSessionAndRecords }: { user: SessionUser | null; refreshSessionAndRecords: () => Promise<void> }) {
   const [users, setUsers] = useState<SessionUser[]>([]);
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [account, setAccount] = useState({ name: "", email: "", employeeNo: "", departmentName: "集团办公室", role: "employee", positionLevel: 1, clearanceLevel: 2 });
+  const [showLocalTestPanel, setShowLocalTestPanel] = useState(false);
+  const [localAccounts, setLocalAccounts] = useState<LocalTestAccountRecord[]>([]);
+  const [switchableAccounts, setSwitchableAccounts] = useState<LocalTestAccount[]>([]);
+  const [localWorking, setLocalWorking] = useState("");
+  const [localMessage, setLocalMessage] = useState("");
+  const currentLocalAccount = localAccounts.find((accountItem) => accountItem.id === user?.id);
 
   const loadUsers = useCallback(async () => {
     if (user?.role !== "system_admin") return;
@@ -533,6 +553,58 @@ function AccessCenter({ user }: { user: SessionUser | null }) {
     if (response.ok) setUsers(result.users || []); else setMessage(result.error || "读取账号失败");
   }, [user?.role]);
   useEffect(() => { void (async () => { await loadUsers(); })(); }, [loadUsers]);
+
+  useEffect(() => {
+    // 说明：浏览器侧只在 Vite development 和回环地址尝试显示面板；
+    // 服务端接口仍会再次验证 development + localhost，前端条件不能绕过生产安全边界。
+    const panelTimer = window.setTimeout(() => {
+      const hostName = window.location.hostname;
+      setShowLocalTestPanel(import.meta.env.DEV && ["localhost", "127.0.0.1", "::1"].includes(hostName));
+    }, 0);
+    return () => window.clearTimeout(panelTimer);
+  }, []);
+
+  useEffect(() => {
+    if (!showLocalTestPanel || user?.role !== "system_admin") return;
+    // 说明：本机管理员读取服务端返回的虚构测试账号和预期资料范围；
+    // 非管理员不会得到账号清单，避免前端承担身份授权逻辑。
+    void (async () => {
+      const response = await fetch("/api/local-test/accounts", { cache: "no-store" });
+      const result = await response.json() as { users?: LocalTestAccountRecord[]; switchableAccounts?: LocalTestAccount[]; error?: string };
+      if (response.ok) {
+        setLocalAccounts(result.users || []);
+        setSwitchableAccounts(result.switchableAccounts || []);
+      } else {
+        setLocalMessage(result.error || "无法读取本机测试账号");
+      }
+    })();
+  }, [showLocalTestPanel, user?.role]);
+
+  async function switchLocalIdentity(accountKey: LocalTestAccount["key"]) {
+    setLocalWorking(accountKey); setLocalMessage("");
+    try {
+      // 说明：前端只传固定账号代号，服务端负责验证管理员身份、白名单和 HttpOnly Cookie。
+      const response = await fetch("/api/local-test/accounts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "switch", account: accountKey }) });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "切换本机测试身份失败");
+      await refreshSessionAndRecords();
+      setLocalMessage("测试身份已切换，当前会话和资料列表已按服务端权限刷新。");
+    } catch (error) { setLocalMessage(error instanceof Error ? error.message : "切换本机测试身份失败"); }
+    finally { setLocalWorking(""); }
+  }
+
+  async function restoreLocalAdministrator() {
+    setLocalWorking("clear"); setLocalMessage("");
+    try {
+      // 说明：清除本机 HttpOnly Cookie 后，统一认证入口会在 localhost development 下回退到默认管理员。
+      const response = await fetch("/api/local-test/accounts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "clear" }) });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "恢复本机管理员失败");
+      await refreshSessionAndRecords();
+      setLocalMessage("已清除本机测试身份，当前会话已恢复默认管理员。");
+    } catch (error) { setLocalMessage(error instanceof Error ? error.message : "恢复本机管理员失败"); }
+    finally { setLocalWorking(""); }
+  }
 
   async function addAccount() {
     if (!account.name.trim() || !account.email.trim()) { setMessage("请填写员工姓名和实际登录邮箱。"); return; }
@@ -564,6 +636,11 @@ function AccessCenter({ user }: { user: SessionUser | null }) {
 
   return <section className="page"><PageTitle kicker="账号与数据权限" title="权限中心" text="每次登录后，系统根据账号、部门、岗位级别、数据级别和单独授权共同决定可见范围。"/>
     {user && <div className="panel current-account"><div className="account-avatar">{user.name[0]}</div><div><span>当前登录账号</span><h2>{user.name}</h2><p>{user.email} · {user.departmentName}</p></div><div className="account-tags"><em>{roleLabel(user.role)}</em><em>P{user.positionLevel} 岗位级别</em><em>D{user.clearanceLevel} 数据许可</em></div></div>}
+    {showLocalTestPanel && user && <section className="panel local-test-panel"><div className="local-test-head"><div><p>仅本机开发测试</p><h2>本机测试身份</h2><span>不会出现在正式系统。切换后，资料列表会立即按服务端真实权限重新过滤。</span></div><b>LOCAL ONLY</b></div><div className="local-test-current"><strong>当前：{user.name}</strong><span>{roleLabel(user.role)} · {user.departmentName} · P{user.positionLevel} / D{user.clearanceLevel}</span><small>当前预期可见级别：{currentLocalAccount?.readableLevels.join("、") || `D${user.clearanceLevel}，以服务端实际过滤为准`}。</small></div>
+      {user.role === "system_admin" ? <div className="local-test-actions">{switchableAccounts.map(item => <button key={item.key} disabled={Boolean(localWorking)} onClick={() => void switchLocalIdentity(item.key)}><strong>{item.name}</strong><span>{item.key} · {item.email}</span></button>)}</div> : <div className="local-test-restore"><span>当前为非管理员测试身份。恢复后可再次切换其他本机账号。</span><button disabled={localWorking === "clear"} onClick={() => void restoreLocalAdministrator()}>{localWorking === "clear" ? "正在恢复…" : "恢复管理员"}</button></div>}
+      {user.role === "system_admin" && localAccounts.length > 0 && <div className="local-test-levels">{localAccounts.map(item => <span key={item.id}><b>{item.name}</b><small>可见：{item.readableLevels.join("、") || "无"}</small></span>)}</div>}
+      {localMessage && <div className="notice local-test-notice">{localMessage}</div>}
+    </section>}
     <div className="access-formula"><Icon name="shield" size={22}/><div><strong>最终可见权限 = 登录账号 ∩ 所属部门 ∩ 岗位级别 ∩ 数据级别 ∩ 文件范围 ∩ 单独授权</strong><span>任一条件不满足，资料列表、正文接口和后续AI检索都会拒绝返回数据。</span></div></div>
     <section className="panel standard-panel"><div className="standard-head"><div><h2>试用数据分级标准</h2><p>先用您公司的脱敏资料验证，不把高风险真实数据带入试用环境。</p></div><b>强制执行</b></div>
       <div className="standard-table"><div><span>级别</span><span>试用内容</span><span>允许账号</span><span>限制</span></div>{levelRows.map(row => <article className={row[0].startsWith("D4") ? "forbidden" : ""} key={row[0]}>{row.map(cell => <span key={cell}>{cell}</span>)}</article>)}</div>
