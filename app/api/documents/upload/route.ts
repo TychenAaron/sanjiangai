@@ -19,6 +19,7 @@ export async function POST(request: Request) {
   let storageWritten = false;
   try {
     const user = await requireAccessUser(request);
+    if (user.role !== "system_admin") return Response.json({ error: "仅系统管理员可以上传知识资源" }, { status: 403 });
     const form = await request.formData();
     const file = form.get("file");
     if (!(file instanceof File)) return Response.json({ error: "请选择要上传的文件" }, { status: 400 });
@@ -42,7 +43,7 @@ export async function POST(request: Request) {
       return Response.json({ error: "当前账号无权上传该数据级别或责任部门的资料" }, { status: 403 });
     }
 
-    const { buffer, content } = await extractUpload(file);
+    const { buffer, content, parseStatus, parseReason } = await extractUpload(file);
     const title = String(form.get("title") || file.name.replace(/\.[^.]+$/, "")).trim();
     if (!title) return Response.json({ error: "请填写文件名称" }, { status: 400 });
     const db = getDb();
@@ -72,11 +73,13 @@ export async function POST(request: Request) {
     await db.insert(documents).values({
       id: documentId, title, documentType: String(form.get("documentType") || "其他资料"), sourceType: "文件上传",
       sourceRef: file.name, ownerDepartment, securityLevel, permissionScope, lifecycleStatus: "effective", trialDataClass, isTrialData: true,
-      fileName: file.name, storageKey, mimeType: file.type || "application/octet-stream", fileSize: file.size, parseStatus: "parsed", indexStatus: "ready",
+      fileName: file.name, storageKey, mimeType: file.type || "application/octet-stream", fileSize: file.size, parseStatus, indexStatus: parseStatus === "parsed" ? "ready" : "pending",
+      resourceStatus: "pending_review", resourceCategory: String(form.get("resourceCategory") || form.get("documentType") || "其他"), sourceOrganization: String(form.get("sourceOrganization") || "").trim() || null,
+      documentDate: String(form.get("documentDate") || "").trim() || null, applicableScope: String(form.get("applicableScope") || "").trim() || null, reliabilityScore: Number(form.get("reliabilityScore")) || 0,
       knowledgeStatus: "pending", currentVersion: 1, createdBy: user.name, createdByUserId: user.id, createdAt: now, updatedAt: now,
     });
     await db.insert(documentVersions).values({
-      id: versionId, documentId, versionNo: 1, content, changeSummary: "文件首次上传并自动解析", versionStatus: "pending", createdBy: user.name, createdAt: now,
+      id: versionId, documentId, versionNo: 1, content, changeSummary: parseStatus === "parsed" ? "文件首次上传并自动解析" : `文件已保存，${parseReason || "等待后续解析"}`, versionStatus: "pending", createdBy: user.name, createdAt: now,
     });
     const chunkCount = await indexDocumentVersion(documentId, versionId, content);
     await db.insert(approvals).values({ id: crypto.randomUUID(), documentId, versionId, status: "pending", submittedBy: user.name, submittedAt: now });

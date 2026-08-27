@@ -22,10 +22,13 @@ export const documents = sqliteTable("documents", {
   trialDataClass: text("trial_data_class").notNull().default("T2-内部脱敏测试"), isTrialData: integer("is_trial_data", { mode: "boolean" }).notNull().default(true),
   fileName: text("file_name"), storageKey: text("storage_key"), mimeType: text("mime_type"), fileSize: integer("file_size"),
   parseStatus: text("parse_status").notNull().default("parsed"), indexStatus: text("index_status").notNull().default("ready"),
+  // 正式资料的生命周期与审核元数据；只有 approved、effective 且可靠性达标的资料可进入检索和写作引用。
+  resourceStatus: text("resource_status").notNull().default("draft"), resourceCategory: text("resource_category").notNull().default("其他"),
+  sourceOrganization: text("source_organization"), documentDate: text("document_date"), applicableScope: text("applicable_scope"), reliabilityScore: integer("reliability_score").notNull().default(0), reviewNote: text("review_note"),
   knowledgeStatus: text("knowledge_status").notNull().default("pending"), currentVersion: integer("current_version").notNull().default(1),
   createdBy: text("created_by").notNull().default("项目管理员"), createdByUserId: text("created_by_user_id"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-}, (table) => [index("documents_updated_at_idx").on(table.updatedAt), index("documents_status_idx").on(table.knowledgeStatus), index("documents_source_idx").on(table.sourceType)]);
+}, (table) => [index("documents_updated_at_idx").on(table.updatedAt), index("documents_status_idx").on(table.knowledgeStatus), index("documents_resource_status_idx").on(table.resourceStatus), index("documents_source_idx").on(table.sourceType)]);
 
 export const documentVersions = sqliteTable("document_versions", {
   id: text("id").primaryKey(), documentId: text("document_id").notNull(), versionNo: integer("version_no").notNull(),

@@ -17,7 +17,7 @@ export async function parseWritingReference(input: { fileName: string; mimeType?
   }
   if (format === "xlsx" || format === "xls") {
     try { const book = XLSX.read(input.buffer, { type: "array" }); const locations: string[] = []; const lines: string[] = [];
-      for (const name of book.SheetNames) { const rows = XLSX.utils.sheet_to_json<string[]>(book.Sheets[name], { header: 1, defval: "" }); rows.forEach((row, index) => { const value = row.filter(Boolean).join(" | "); if (value) { locations.push(`工作表“${name}”第${index + 1}行`); lines.push(`${locations.at(-1)}：${value}`); } }); }
+      for (const name of book.SheetNames) { const sheet = book.Sheets[name]; for (const address of Object.keys(sheet)) { if (address.startsWith("!")) continue; const value = String(sheet[address]?.w ?? sheet[address]?.v ?? "").trim(); if (value) { const location = `工作表“${name}”单元格${address}`; locations.push(location); lines.push(`${location}：${value}`); } } }
       return { format, status: lines.length ? "parsed" : "pending_ocr", text: lines.join("\n"), locations, reason: lines.length ? undefined : "工作表未包含可读文本，待 OCR 或人工转换" };
     } catch (error) { return { format, status: "failed", text: "", locations: [], reason: error instanceof Error ? `表格解析失败：${error.message}` : "表格解析失败" }; }
   }
@@ -28,5 +28,6 @@ export async function parseWritingReference(input: { fileName: string; mimeType?
     } catch (error) { return { format, status: "failed", text: "", locations: [], reason: error instanceof Error ? `Office XML 解析失败：${error.message}` : "Office XML 解析失败" }; }
   }
   if (format === "ppt") return { format, status: "pending_conversion", text: "", locations: [], reason: "旧版 PowerPoint .ppt 需要有效二进制样例完成 Worker 实测，当前待转换或待 OCR" };
+  if (format === "pdf") return { format, status: "pending_ocr", text: "", locations: [], reason: "PDF 已安全保存，当前等待 OCR 或 PDF 文本解析服务" };
   return { format, status: "failed", text: "", locations: [], reason: "不支持的参考材料格式" };
 }

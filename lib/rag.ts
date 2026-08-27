@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne, gte } from "drizzle-orm";
 import { env } from "cloudflare:workers";
 import { getDb } from "../db";
 import { documentAcl, documentChunks, documents, documentVersions } from "../db/schema";
@@ -69,7 +69,8 @@ export async function retrieveAuthorized(user: AccessUser, query: string) {
     }).from(documentChunks)
       .innerJoin(documents, eq(documentChunks.documentId, documents.id))
       .innerJoin(documentVersions, eq(documentChunks.versionId, documentVersions.id))
-      .where(and(eq(documents.knowledgeStatus, "approved"), eq(documentVersions.versionStatus, "approved")))
+      // 正式检索只读取已批准、有效、非 D4 且可靠性达标的当前版本；其余状态即使已有分段也不会参与评分或模型输入。
+      .where(and(eq(documents.knowledgeStatus, "approved"), eq(documents.resourceStatus, "approved"), eq(documents.lifecycleStatus, "effective"), ne(documents.securityLevel, "D4"), gte(documents.reliabilityScore, 60), eq(documentVersions.versionStatus, "approved")))
       .limit(3000),
   ]);
   const reliableScore = minimumReliableScore();

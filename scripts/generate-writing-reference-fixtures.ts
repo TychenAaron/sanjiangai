@@ -7,6 +7,7 @@ import { parseWritingReference } from "../lib/writing-reference-parser.ts";
 
 const fixturesDir = resolve("scripts/fixtures");
 const xlsxPath = resolve(fixturesDir, "writing-reference-virtual.xlsx");
+const xlsPath = resolve(fixturesDir, "writing-reference-virtual.xls");
 const pptxPath = resolve(fixturesDir, "writing-reference-virtual.pptx");
 
 function assert(value: unknown, message: string): asserts value {
@@ -23,6 +24,13 @@ function createXlsx() {
   ]);
   XLSX.utils.book_append_sheet(workbook, sheet, "本机测试工作表");
   return XLSX.write(workbook, { type: "array", bookType: "xlsx" });
+}
+
+// 使用同一份完全虚构表格生成旧版 XLS，验证管理员上传不会把旧 Excel 误判为待转换文件。
+function createXls() {
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["本机测试旧版表格"], ["本机测试单元格一"], ["本机测试单元格二"]]), "本机测试旧表");
+  return XLSX.write(workbook, { type: "array", bookType: "xls" });
 }
 
 // 生成两页最小 PPTX ZIP 结构；当前解析器只读取 slide XML，因此每页都放入可提取的虚构文字。
@@ -47,10 +55,13 @@ async function verifyFixture(path: string, expectedStatus: string, expectedTexts
 
 await mkdir(fixturesDir, { recursive: true });
 await writeFile(xlsxPath, new Uint8Array(createXlsx()));
+await writeFile(xlsPath, new Uint8Array(createXls()));
 await writeFile(pptxPath, createPptx());
 
-const xlsx = await verifyFixture(xlsxPath, "parsed", ["本机测试字段", "本机测试私有参考材料", "本机测试待人工确认"], ["第1行", "第2行", "第3行"]);
+const xlsx = await verifyFixture(xlsxPath, "parsed", ["本机测试字段", "本机测试私有参考材料", "本机测试待人工确认"], ["单元格A1", "单元格A2", "单元格A3"]);
+const xls = await verifyFixture(xlsPath, "parsed", ["本机测试旧版表格", "本机测试单元格一", "本机测试单元格二"], ["单元格A1", "单元格A2", "单元格A3"]);
 const pptx = await verifyFixture(pptxPath, "parsed", ["本机测试演示第1页", "本机测试演示第2页"], ["第1页", "第2页"]);
 
 console.log(`PASS ${xlsxPath}：${xlsx.locations.length} 个表格定位`);
+console.log(`PASS ${xlsPath}：${xls.locations.length} 个旧版表格定位`);
 console.log(`PASS ${pptxPath}：${pptx.locations.length} 个页面定位`);

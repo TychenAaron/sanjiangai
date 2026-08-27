@@ -24,6 +24,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const user = await requireAccessUser(request);
+    if (user.role !== "system_admin") return Response.json({ error: "仅系统管理员可以录入知识资源" }, { status: 403 });
     const body = (await request.json()) as Record<string, string | boolean>;
     const title = String(body.title || "").trim();
     const content = String(body.content || "").trim();
@@ -61,7 +62,8 @@ export async function POST(request: Request) {
     await db.insert(documents).values({
       id: documentId, title, documentType: String(body.documentType || "其他资料"), sourceType: String(body.sourceType || "人工录入"),
       sourceRef: String(body.sourceRef || "") || null, ownerDepartment, securityLevel, permissionScope,
-      lifecycleStatus: "effective", trialDataClass, isTrialData: true, knowledgeStatus: status, currentVersion: 1,
+      lifecycleStatus: "effective", trialDataClass, isTrialData: true, resourceStatus: status === "draft" ? "draft" : "pending_review", resourceCategory: String(body.resourceCategory || body.documentType || "其他"),
+      sourceOrganization: String(body.sourceOrganization || "").trim() || null, documentDate: String(body.documentDate || "").trim() || null, applicableScope: String(body.applicableScope || "").trim() || null, reliabilityScore: Number(body.reliabilityScore) || 0, knowledgeStatus: status, currentVersion: 1,
       createdBy: operator, createdByUserId: user.id, createdAt: now, updatedAt: now,
     });
     await db.insert(documentVersions).values({

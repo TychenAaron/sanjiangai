@@ -418,6 +418,13 @@ button { cursor: pointer; }
 .record-status.pending { background: #fff3df; color: #9b6618; }
 .record-status.approved { background: #edf6f1; color: var(--green); }
 .record-status.rejected { background: #fff0ef; color: #a44942; }
+.record-status.pending_review { background: #fff3df; color: #9b6618; }
+.record-status.archived { background: #edf0f2; color: #66727c; }
+.library-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+.library-filters select, .library-filters input { min-height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: white; color: var(--ink); font: inherit; font-size: 8px; }
+.library-table button span small { display: block; margin-top: 3px; color: var(--muted); }
+.resource-metadata { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 14px; color: var(--muted); font-size: 8px; }
+.resource-metadata span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .version-panel { margin-top: 13px; padding: 18px; }
 .version-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .version-head strong, .version-head span { display: block; }

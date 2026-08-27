@@ -7,7 +7,8 @@ type IconName = "home" | "chat" | "pen" | "policy" | "folder" | "admin" | "searc
 
 type DocumentRecord = {
   id: string; title: string; documentType: string; sourceType: string; ownerDepartment: string;
-  securityLevel: string; permissionScope: string; lifecycleStatus: string; knowledgeStatus: string;
+  securityLevel: string; permissionScope: string; lifecycleStatus: string; knowledgeStatus: string; resourceStatus: string;
+  resourceCategory: string; sourceOrganization: string | null; documentDate: string | null; applicableScope: string | null; reliabilityScore: number; reviewNote: string | null;
   trialDataClass: string; isTrialData: boolean; fileName: string | null; parseStatus: string; indexStatus: string;
   currentVersion: number; createdBy: string; createdByUserId: string | null; createdAt: string; updatedAt: string;
 };
@@ -603,7 +604,7 @@ function ProjectOverview() {
 }
 
 function statusLabel(status: string) {
-  return status === "approved" ? "已入正式知识库" : status === "pending" ? "待审核" : status === "rejected" ? "已退回" : "草稿";
+  return status === "approved" ? "已批准" : status === "pending" || status === "pending_review" ? "待审核" : status === "rejected" ? "已拒绝" : status === "archived" ? "已归档" : "草稿";
 }
 
 function roleLabel(role: string) {
@@ -627,9 +628,51 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
   const [versionContent, setVersionContent] = useState("");
   const [changeSummary, setChangeSummary] = useState("人工修改");
   const [versionEditor, setVersionEditor] = useState(false);
-  const [form, setForm] = useState({ title: "", documentType: "制度文件", sourceType: "人工录入", ownerDepartment: user?.departmentName || "集团办公室", securityLevel: "内部", permissionScope: "责任部门", trialDataClass: "T2-内部脱敏测试", content: "", confirmedDesensitized: false });
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [sourceFilter, setSourceFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [reviewForm, setReviewForm] = useState({ resourceCategory: "", sourceOrganization: "", documentDate: "", applicableScope: "", reliabilityScore: "60", comment: "" });
+  const [form, setForm] = useState({ title: "", documentType: "制度文件", sourceType: "人工录入", ownerDepartment: user?.departmentName || "集团办公室", securityLevel: "内部", permissionScope: "责任部门", trialDataClass: "T2-内部脱敏测试", resourceCategory: "其他", sourceOrganization: "", documentDate: "", applicableScope: "", content: "", confirmedDesensitized: false });
 
   function setField(name: string, value: string) { setForm(previous => ({ ...previous, [name]: value })); }
+  const isSystemAdmin = user?.role === "system_admin";
+  const visibleRecords = records.filter((record) =>
+    (statusFilter === "all" || record.resourceStatus === statusFilter) &&
+    (categoryFilter === "all" || record.resourceCategory === categoryFilter) &&
+    (!sourceFilter || (record.sourceOrganization || "").includes(sourceFilter)) &&
+    (!dateFrom || (record.documentDate || "") >= dateFrom) &&
+    (!dateTo || (record.documentDate || "") <= dateTo),
+  );
+
+  // 审核输入为管理员补齐的元数据和决定；接口再次校验角色与批准门槛，页面不会自行伪造状态。
+  async function reviewResource(record: DocumentRecord, decision: "approve" | "reject") {
+    if (decision === "reject" && !reviewForm.comment.trim()) { setNotice("拒绝资料时请填写简短审核理由。"); return; }
+    setSaving(true); setNotice("");
+    try {
+      const response = await fetch(`/api/documents/${record.id}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision, ...reviewForm, reliabilityScore: Number(reviewForm.reliabilityScore) }) });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "审核失败");
+      setNotice(decision === "approve" ? "资料已批准，可按权限作为正式依据使用。" : "资料已拒绝，不会进入正式检索和引用。");
+      await refresh();
+    } catch (error) { setNotice(error instanceof Error ? error.message : "审核失败"); }
+    finally { setSaving(false); }
+  }
+
+  // 归档与删除均由服务端执行权限和 D1/R2 清理；前端只显示简短结果，不显示存储键或正文。
+  async function changeLifecycle(record: DocumentRecord, action: "archive" | "delete") {
+    if (!window.confirm(action === "archive" ? "确认归档此资料？归档后不能作为正式依据。" : "确认删除此资料？该操作会清理资料记录和检索索引。")) return;
+    setSaving(true); setNotice("");
+    try {
+      const response = await fetch(`/api/documents/${record.id}/lifecycle`, { method: action === "archive" ? "POST" : "DELETE" });
+      const result = await response.json() as { error?: string; storageCleanup?: string };
+      if (!response.ok) throw new Error(result.error || "资料操作失败");
+      setSelected(null); setNotice(action === "archive" ? "资料已归档，已退出检索和正式引用范围。" : "资料已删除并完成检索清理。");
+      await refresh();
+    } catch (error) { setNotice(error instanceof Error ? error.message : "资料操作失败"); }
+    finally { setSaving(false); }
+  }
   async function save(submitMode: "draft" | "pending") {
     if (ingestMode === "file") { await saveUpload(); return; }
     if (!form.title.trim() || !form.content.trim()) { setNotice("请先填写文件名称和正文内容。"); return; }
@@ -655,6 +698,8 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
       payload.set("file", uploadFile); payload.set("title", form.title); payload.set("documentType", form.documentType);
       payload.set("ownerDepartment", form.ownerDepartment); payload.set("securityLevel", form.securityLevel);
       payload.set("permissionScope", form.permissionScope); payload.set("trialDataClass", form.trialDataClass); payload.set("confirmedDesensitized", "true");
+      payload.set("resourceCategory", form.resourceCategory); payload.set("sourceOrganization", form.sourceOrganization);
+      payload.set("documentDate", form.documentDate); payload.set("applicableScope", form.applicableScope);
       const response = await fetch("/api/documents/upload", { method: "POST", body: payload });
       const result = await response.json() as { error?: string; chunkCount?: number };
       if (!response.ok) throw new Error(result.error || "上传失败");
@@ -690,12 +735,12 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
   return <section className="page"><PageTitle kicker="知识中枢" title="知识资源" text="统一管理OA转载、人工上传、政府政策、AI草稿、人工修改稿和最终定稿；原文、元数据、权限和版本同步留存。"/>
     <div className="resource-capabilities">{[["多级目录","按业务、部门和专题组织"],["元数据与标签","来源、文号、状态、密级、责任人"],["版本与时序","现行、修订、废止完整留痕"],["知识加工","解析、切片、抽取、向量与结构化"],["检索与统计","全文/语义/混合检索及访问统计"]].map(item => <div className="panel" key={item[0]}><strong>{item[0]}</strong><span>{item[1]}</span></div>)}</div>
     <div className="data-flow"><div><b>01</b><strong>原始资料层</strong><span>OA原文、政府网页、人工录入</span></div><i>→</i><div><b>02</b><strong>加工与草稿层</strong><span>解析文本、AI草稿、人工修改稿</span></div><i>→</i><div><b>03</b><strong>正式知识层</strong><span>经审核的现行文件和最终定稿</span></div></div>
-    <div className="library-actions"><div><strong>资料台账</strong><span>共 {records.length} 份真实记录</span></div><button onClick={() => setAdding(!adding)}>{adding ? "取消新增" : "＋ 新增测试资料"}</button></div>
+    <div className="library-actions"><div><strong>资料台账</strong><span>共 {records.length} 份真实记录</span></div>{isSystemAdmin && <button onClick={() => setAdding(!adding)}>{adding ? "取消新增" : "＋ 新增测试资料"}</button>}</div>
     {notice && <div className="notice">{notice}</div>}
     {adding && <div className="panel ingest-form">
       <div className="trial-rule"><Icon name="shield" size={18}/><div><strong>当前为试用数据入口</strong><span>只允许公开资料、内部脱敏测试资料和部门隔离测试资料；真实敏感资料与禁止项不得上传。</span></div></div>
-      <div className="ingest-mode"><button className={ingestMode === "file" ? "active" : ""} onClick={() => setIngestMode("file")}>上传文件</button><button className={ingestMode === "text" ? "active" : ""} onClick={() => setIngestMode("text")}>粘贴正文</button><span>{ingestMode === "file" ? "当前已支持 .docx / .txt / .md；一期目标扩展 PDF、PPT、Excel、图片与OCR扫描件。" : "适合快速粘贴一小段脱敏制度进行测试。"}</span></div>
-      {ingestMode === "file" && <label className="file-drop"><input type="file" accept=".docx,.txt,.md" onChange={event => { const file = event.target.files?.[0] || null; setUploadFile(file); if (file && !form.title) setField("title", file.name.replace(/\.[^.]+$/, "")); }}/><Icon name="folder" size={24}/><span><strong>{uploadFile ? uploadFile.name : "选择脱敏文件"}</strong><small>{uploadFile ? `${(uploadFile.size / 1024).toFixed(1)} KB` : "单个文件不超过8MB"}</small></span></label>}
+      <div className="ingest-mode"><button className={ingestMode === "file" ? "active" : ""} onClick={() => setIngestMode("file")}>上传文件</button><button className={ingestMode === "text" ? "active" : ""} onClick={() => setIngestMode("text")}>粘贴正文</button><span>{ingestMode === "file" ? "支持 DOCX、PDF、TXT、MD、XLSX、XLS、PPTX、PPT；XLS/PPT 可安全保存并按状态继续处理。" : "适合快速粘贴一小段脱敏制度进行测试。"}</span></div>
+      {ingestMode === "file" && <label className="file-drop"><input type="file" accept=".docx,.pdf,.txt,.md,.xlsx,.xls,.pptx,.ppt" onChange={event => { const file = event.target.files?.[0] || null; setUploadFile(file); if (file && !form.title) setField("title", file.name.replace(/\.[^.]+$/, "")); }}/><Icon name="folder" size={24}/><span><strong>{uploadFile ? uploadFile.name : "选择脱敏文件"}</strong><small>{uploadFile ? `${(uploadFile.size / 1024).toFixed(1)} KB` : "单个文件不超过8MB"}</small></span></label>}
       <div className="form-grid">
         <label><span>文件名称 *</span><input value={form.title} onChange={e => setField("title", e.target.value)} placeholder="例如：集团采购管理办法（试行）"/></label>
         <label><span>试用数据类别 *</span><select value={form.trialDataClass} onChange={e => { const value = e.target.value; setField("trialDataClass", value); if (value === "T1-公开资料") { setField("securityLevel", "公开"); setField("permissionScope", "公司全员"); } if (value === "T3-部门隔离测试") setField("permissionScope", "责任部门"); }}><option>T1-公开资料</option><option>T2-内部脱敏测试</option><option>T3-部门隔离测试</option></select></label>
@@ -704,18 +749,27 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
         <label><span>责任部门</span><select value={form.ownerDepartment} onChange={e => setField("ownerDepartment", e.target.value)}><option>集团办公室</option><option>科技与信息化部门</option><option>财务管理部</option><option>运营管理部</option><option>所属子公司</option></select></label>
         <label><span>数据级别</span><select disabled={form.trialDataClass === "T1-公开资料"} value={form.securityLevel} onChange={e => setField("securityLevel", e.target.value)}><option>公开</option><option>内部</option>{(user?.clearanceLevel || 0) >= 3 && <option>敏感</option>}</select></label>
         <label><span>可查看范围</span><select disabled={form.trialDataClass === "T1-公开资料" || form.trialDataClass === "T3-部门隔离测试"} value={form.permissionScope} onChange={e => setField("permissionScope", e.target.value)}><option>公司全员</option><option>集团本部</option><option>责任部门</option><option>领导班子</option><option>指定人员</option></select></label>
+        <label><span>资料类别</span><select value={(form as Record<string, string>).resourceCategory || form.documentType} onChange={e => setField("resourceCategory", e.target.value)}><option>制度规范</option><option>正式通知</option><option>工作方案</option><option>会议纪要</option><option>合同模板</option><option>项目资料</option><option>其他</option></select></label>
+        <label><span>来源单位</span><input value={(form as Record<string, string>).sourceOrganization || ""} onChange={e => setField("sourceOrganization", e.target.value)} placeholder="可在审核前补充"/></label>
+        <label><span>文件日期</span><input type="date" value={(form as Record<string, string>).documentDate || ""} onChange={e => setField("documentDate", e.target.value)}/></label>
+        <label><span>适用范围</span><input value={(form as Record<string, string>).applicableScope || ""} onChange={e => setField("applicableScope", e.target.value)} placeholder="可在审核前补充"/></label>
       </div>
       {ingestMode === "text" && <label className="content-field"><span>正文内容 *</span><textarea value={form.content} onChange={e => setField("content", e.target.value)} placeholder="粘贴一小段脱敏测试正文。系统会自动切分成可检索片段。"/></label>}
       <label className="confirm-check"><input type="checkbox" checked={form.confirmedDesensitized} onChange={e => setForm(previous => ({ ...previous, confirmedDesensitized: e.target.checked }))}/><span>我确认该资料已经脱敏，不含真实财务明细、员工隐私、客户个人信息、账号密码、密钥、未公开合同价格及涉密内容。</span></label>
       <div className="form-actions"><small>系统将登录账号、部门、员工级别、数据级别和查看范围共同用于权限判断。</small>{ingestMode === "text" && <button disabled={saving} onClick={() => void save("draft")}>保存草稿</button>}<button disabled={saving} className="submit" onClick={() => void save("pending")}>{saving ? "正在处理…" : ingestMode === "file" ? "上传、解析并提交审核" : "保存并提交审核"}</button></div>
     </div>}
     {error && <div className="notice error">数据库暂时无法读取：{error}</div>}
-    <div className="panel library-table"><div className="table-head"><span>文件名称</span><span>来源</span><span>版本</span><span>知识状态</span><span>更新时间</span></div>
-      {loading ? <div className="table-empty">正在读取资料数据库…</div> : records.length === 0 ? <div className="table-empty">当前登录账号没有可见资料，或数据库中尚无资料。</div> : records.map(d => <button className={selected?.id === d.id ? "selected-row" : ""} onClick={() => void openRecord(d)} key={d.id}><span><i>{d.documentType[0]}</i><span><b>{d.title}</b><small>{d.trialDataClass} · {d.ownerDepartment} · {d.securityLevel} · {d.permissionScope}</small></span></span><span>{d.sourceType}</span><span>V{d.currentVersion}.0</span><span><em className={`record-status ${d.knowledgeStatus}`}>{statusLabel(d.knowledgeStatus)}</em></span><span>{formatDate(d.updatedAt)}</span></button>)}
+    <div className="library-filters"><select value={statusFilter} onChange={event => setStatusFilter(event.target.value)}><option value="all">全部状态</option><option value="pending_review">待审核</option><option value="approved">已批准</option><option value="rejected">已拒绝</option><option value="archived">已归档</option></select><select value={categoryFilter} onChange={event => setCategoryFilter(event.target.value)}><option value="all">全部类别</option>{[...new Set(records.map(item => item.resourceCategory))].map(item => <option key={item} value={item}>{item}</option>)}</select><input value={sourceFilter} onChange={event => setSourceFilter(event.target.value)} placeholder="来源单位"/><input type="date" value={dateFrom} onChange={event => setDateFrom(event.target.value)} title="文件日期起始"/><input type="date" value={dateTo} onChange={event => setDateTo(event.target.value)} title="文件日期截止"/></div>
+    <div className="panel library-table"><div className="table-head"><span>资料</span><span>类别与来源</span><span>可靠性</span><span>状态</span><span>文件日期</span></div>
+      {loading ? <div className="table-empty">正在读取资料数据库…</div> : visibleRecords.length === 0 ? <div className="table-empty">当前筛选范围内没有可见资料。</div> : visibleRecords.map(d => <button className={selected?.id === d.id ? "selected-row" : ""} onClick={() => { setReviewForm({ resourceCategory: d.resourceCategory || "", sourceOrganization: d.sourceOrganization || "", documentDate: d.documentDate || "", applicableScope: d.applicableScope || "", reliabilityScore: String(d.reliabilityScore || 60), comment: d.reviewNote || "" }); void openRecord(d); }} key={d.id}><span><i>{d.documentType[0]}</i><span><b>{d.title}</b><small>{d.ownerDepartment} · {d.permissionScope}{d.fileName ? ` · ${d.fileName.split(".").pop()?.toUpperCase()} · ${d.parseStatus === "parsed" ? "已解析" : d.parseStatus === "pending_conversion" ? "待转换解析" : "待 OCR"}` : ""}</small></span></span><span>{d.resourceCategory || "未分类"}<small>{d.sourceOrganization || "待补充来源"}</small></span><span>{d.reliabilityScore || 0} 分</span><span><em className={`record-status ${d.resourceStatus}`}>{statusLabel(d.resourceStatus)}</em></span><span>{d.documentDate || "待补充"}</span></button>)}
     </div>
     {selected && <section className="panel version-panel"><div className="version-head"><div><strong>{selected.title}</strong><span>版本链 · 原始内容不覆盖</span></div><button onClick={() => { setVersionEditor(!versionEditor); setVersionContent(versions[0]?.content || ""); }}>{versionEditor ? "取消修改" : "＋ 创建新版本"}</button></div>
       {versionEditor && <div className="version-editor"><label><span>修改说明</span><input value={changeSummary} onChange={e => setChangeSummary(e.target.value)} placeholder="例如：根据2026年第3次办公会意见修订"/></label><label><span>新版本正文</span><textarea value={versionContent} onChange={e => setVersionContent(e.target.value)}/></label><button disabled={saving} onClick={() => void saveVersion()}>{saving ? "正在生成…" : "生成新版本并提交审核"}</button></div>}
       <div className="version-list">{versions.map(version => <article key={version.id}><b>V{version.versionNo}.0</b><div><strong>{version.changeSummary}</strong><span>{version.createdBy} · {formatDate(version.createdAt)}</span></div><em className={`record-status ${version.versionStatus}`}>{statusLabel(version.versionStatus)}</em></article>)}</div>
+      <div className="resource-metadata"><span>类别：{selected.resourceCategory || "待补充"}</span><span>来源单位：{selected.sourceOrganization || "待补充"}</span><span>适用范围：{selected.applicableScope || "待补充"}</span><span>可靠性：{selected.reliabilityScore || 0} 分</span>{selected.reviewNote && <span>最近审核说明：{selected.reviewNote}</span>}</div>
+      {isSystemAdmin && selected.resourceStatus === "pending_review" && <div className="review-panel"><strong>资料审核</strong><div className="form-grid"><label><span>资料类别 *</span><input value={reviewForm.resourceCategory} onChange={event => setReviewForm(value => ({ ...value, resourceCategory: event.target.value }))}/></label><label><span>来源单位 *</span><input value={reviewForm.sourceOrganization} onChange={event => setReviewForm(value => ({ ...value, sourceOrganization: event.target.value }))}/></label><label><span>文件日期 *</span><input type="date" value={reviewForm.documentDate} onChange={event => setReviewForm(value => ({ ...value, documentDate: event.target.value }))}/></label><label><span>适用范围 *</span><input value={reviewForm.applicableScope} onChange={event => setReviewForm(value => ({ ...value, applicableScope: event.target.value }))}/></label><label><span>可靠性评分 *</span><input type="number" min="0" max="100" value={reviewForm.reliabilityScore} onChange={event => setReviewForm(value => ({ ...value, reliabilityScore: event.target.value }))}/></label><label><span>审核说明</span><input value={reviewForm.comment} onChange={event => setReviewForm(value => ({ ...value, comment: event.target.value }))} placeholder="拒绝时必填"/></label></div><div className="form-actions"><button disabled={saving} onClick={() => void reviewResource(selected, "reject")}>拒绝</button><button disabled={saving} className="submit" onClick={() => void reviewResource(selected, "approve")}>批准</button><button disabled={saving} onClick={() => void changeLifecycle(selected, "archive")}>归档</button></div></div>}
+      {isSystemAdmin && selected.resourceStatus !== "archived" && selected.resourceStatus !== "pending_review" && <div className="form-actions"><button disabled={saving} onClick={() => void changeLifecycle(selected, "archive")}>归档资料</button></div>}
+      {isSystemAdmin && <div className="form-actions"><button disabled={saving} onClick={() => void changeLifecycle(selected, "delete")}>删除资料</button></div>}
     </section>}
   </section>;
 }

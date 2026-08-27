@@ -1,7 +1,7 @@
 import { desc, eq } from "drizzle-orm";
 import { getDb } from "../../../../../db";
 import { approvals, auditLogs, documentAcl, documents, documentVersions } from "../../../../../db/schema";
-import { accessError, canEditDocument, canReadDocument, requireAccessUser } from "../../../../../lib/access";
+import { accessError, canReadDocument, requireAccessUser } from "../../../../../lib/access";
 import { indexDocumentVersion } from "../../../../../lib/ingestion";
 import { findBlockedMatches } from "../../../../../lib/upload-control";
 
@@ -24,6 +24,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const user = await requireAccessUser(request);
+    if (user.role !== "system_admin") return Response.json({ error: "仅系统管理员可以上传资料新版本" }, { status: 403 });
     const { id } = await context.params;
     const body = (await request.json()) as { content?: string; changeSummary?: string };
     const content = body.content?.trim();
@@ -31,8 +32,6 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const db = getDb();
     const [document] = await db.select().from(documents).where(eq(documents.id, id));
     if (!document) return Response.json({ error: "资料不存在" }, { status: 404 });
-    const grants = await db.select().from(documentAcl).where(eq(documentAcl.documentId, id));
-    if (!canEditDocument(user, document, grants)) return Response.json({ error: "当前账号无权修改该资料" }, { status: 403 });
     const blocked = await findBlockedMatches({ title: document.title, content });
     if (blocked.length) {
       const blockedAt = new Date().toISOString();
@@ -48,7 +47,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const operator = user.name;
     await db.insert(documentVersions).values({ id: versionId, documentId: id, versionNo: nextVersion, content, changeSummary: body.changeSummary?.trim() || "人工修改", versionStatus: "pending", createdBy: operator, createdAt: now });
     await indexDocumentVersion(id, versionId, content);
-    await db.update(documents).set({ currentVersion: nextVersion, knowledgeStatus: "pending", updatedAt: now }).where(eq(documents.id, id));
+    await db.update(documents).set({ currentVersion: nextVersion, knowledgeStatus: "pending", resourceStatus: "pending_review", updatedAt: now }).where(eq(documents.id, id));
     await db.insert(approvals).values({ id: crypto.randomUUID(), documentId: id, versionId, status: "pending", submittedBy: operator, submittedAt: now });
     await db.insert(auditLogs).values({ id: crypto.randomUUID(), action: "提交新版本", entityType: "document", entityId: id, operator, detail: `${document.title}｜V${nextVersion}.0｜${body.changeSummary?.trim() || "人工修改"}`, createdAt: now });
     return Response.json({ ok: true, version: nextVersion }, { status: 201 });

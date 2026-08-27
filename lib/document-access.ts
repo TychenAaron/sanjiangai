@@ -7,6 +7,7 @@ export type AccessDocument = {
   securityLevel: string;
   permissionScope: string;
   lifecycleStatus: string;
+  resourceStatus: string;
   knowledgeStatus: string;
   createdByUserId: string | null;
 };
@@ -28,7 +29,7 @@ export type AccessUserLike = {
   clearanceLevel: number;
 };
 
-const reviewRoles = new Set(["reviewer", "knowledge_admin", "system_admin"]);
+const reviewRoles = new Set(["system_admin"]);
 
 // 说明：把中文和英文的资料级别统一换算成可比较的内部等级。
 // 输入是资料级别字符串，输出是 1 到 3 的等级数字，数字越大表示越敏感。
@@ -178,19 +179,9 @@ export function canEditDocument(
 export function canReviewDocument(
   user: AccessUserLike,
   document: AccessDocument,
-  grants: AccessGrant[] = [],
 ) {
   // 说明：系统管理员承担全局审核职责，可审核任何待审核资料；这不改变普通员工读取或审核权限。
-  if (user.role === "system_admin" && document.knowledgeStatus === "pending") return true;
+  if (user.role === "system_admin" && document.resourceStatus === "pending_review") return true;
 
-  const direct = grants.find(
-    (grant) =>
-      grant.documentId === document.id &&
-      grant.subjectType === "user" &&
-      grant.subjectId === user.id,
-  );
-  return (
-    canReadDocument(user, document, grants) &&
-    (reviewRoles.has(user.role) || Boolean(direct?.canReview))
-  );
+  return false;
 }

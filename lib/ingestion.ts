@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { strFromU8, unzipSync } from "fflate";
 import { getDb } from "../db";
 import { documentChunks } from "../db/schema";
+import { parseWritingReference } from "./writing-reference-parser";
 
 const MAX_EXTRACTED_CHARS = 600_000;
 
@@ -32,17 +33,28 @@ function extractDocx(bytes: Uint8Array) {
 
 export async function extractUpload(file: File) {
   const extension = file.name.split(".").pop()?.toLowerCase() || "";
-  if (!new Set(["txt", "md", "docx"]).has(extension)) {
-    throw new Error("本关支持.docx、.txt和.md文件；PDF和扫描件将在OCR关接入");
+  if (!new Set(["txt", "md", "docx", "pdf", "xlsx", "xls", "pptx", "ppt"]).has(extension)) {
+    throw new Error("仅支持 DOCX、PDF、TXT、MD、XLSX、XLS、PPTX 和 PPT 文件");
   }
   if (file.size <= 0) throw new Error("上传文件为空");
   if (file.size > 8 * 1024 * 1024) throw new Error("单个试用文件不得超过8MB");
   const buffer = await file.arrayBuffer();
   const bytes = new Uint8Array(buffer);
-  const content = extension === "docx" ? extractDocx(bytes) : normalizeText(new TextDecoder("utf-8").decode(bytes));
-  if (!content) throw new Error("没有从文件中识别到可用正文");
+  const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b;
+  const isCompoundOffice = bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0;
+  const isPdf = new TextDecoder().decode(bytes.slice(0, 5)) === "%PDF-";
+  // 扩展名与二进制容器必须相符，防止把文本或任意文件伪装成 Office/PDF 后留下空资料。
+  if (["docx", "xlsx", "pptx"].includes(extension) && !isZip) throw new Error("文件扩展名与 Office 文件格式不匹配");
+  if (["xls", "ppt"].includes(extension) && !isCompoundOffice) throw new Error("文件扩展名与旧版 Office 文件格式不匹配");
+  if (extension === "pdf" && !isPdf) throw new Error("文件扩展名与 PDF 文件格式不匹配");
+  if (extension === "docx") extractDocx(bytes);
+  // 正式资料与私有参考共用经过验证的 Office 解析器，避免同一格式在两条上传链路中出现不同结果。
+  const parsed = await parseWritingReference({ fileName: file.name, mimeType: file.type, buffer });
+  if (parsed.status === "failed") throw new Error("文件损坏、伪造扩展名或无法解析");
+  const content = normalizeText(parsed.text);
+  if (parsed.status === "parsed" && !content) throw new Error("没有从文件中识别到可用正文");
   if (content.length > MAX_EXTRACTED_CHARS) throw new Error("文件正文过长，请拆分后上传");
-  return { buffer, content, extension };
+  return { buffer, content, extension, parseStatus: parsed.status, parseReason: parsed.reason || null, locations: parsed.locations };
 }
 
 export function splitIntoChunks(input: string) {
