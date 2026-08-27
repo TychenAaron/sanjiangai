@@ -5,11 +5,41 @@ import { auditLogs, writingDocuments, writingPrivateReferences, writingVersions 
 import { accessError, requireAccessUser } from "../../../lib/access";
 import { buildOutline, checkWriting, resolveWritingReferences, summarizePrivateReferences, WRITING_TYPES, type WritingType } from "../../../lib/writing";
 import { normalizeStructuredWriting, structuredWritingToText } from "../../../lib/writing-structured";
-import { generateWritingWithGateway, type WritingGenerationResult } from "../../../lib/writing-model-gateway";
+import { generateWritingWithGateway, resolveWritingModelRuntime, type WritingGenerationResult } from "../../../lib/writing-model-gateway";
 
 export const runtime = "edge";
 
 function canManageWriting(user: { role: string }) { return user.role === "system_admin"; }
+
+// 说明：把安全审计类别转换为页面可见的短提示。输入不包含模型原文，输出不会泄露提示词、私有材料或网关内部错误。
+function writingGenerationError(category: WritingGenerationResult["category"]) {
+  if (category === "model_disabled" || category === "model_not_configured") return "未配置可用写作模型，暂无法生成正文。";
+  if (category === "model_invalid_json" || category === "model_invalid_structure" || category === "model_rejected") return "本地模型返回格式不符合要求，未生成正文，请重试。";
+  if (category === "model_restricted_input") return "当前输入包含受限内容，未生成正文。";
+  return "本地模型调用失败，未生成正文，请检查模型服务后重试。";
+}
+
+// 说明：读取写作网关的实际服务端运行时配置。Cloudflare 部署读取 Worker secret bindings；Vite/Miniflare 本机开发时，.env secrets 由 process.env 提供。
+// 输出仅传给服务端网关，绝不返回页面、审计详情或普通日志。
+function getWritingModelRuntime() {
+  // Vinext/Cloudflare 的模块运行器无法可靠枚举整个 process.env；必须逐项静态读取，
+  // 才能让本机 .env 的服务端变量进入 API Route，同时不会暴露给浏览器代码。
+  const workerRuntime = {
+    AI_MODEL_ENABLED: env.AI_MODEL_ENABLED,
+    AI_GATEWAY_BASE_URL: env.AI_GATEWAY_BASE_URL,
+    AI_GATEWAY_API_KEY: env.AI_GATEWAY_API_KEY,
+    AI_WRITING_MODEL: env.AI_WRITING_MODEL,
+    AI_MODEL_TIMEOUT_MS: env.AI_MODEL_TIMEOUT_MS,
+  };
+  const localRuntime = {
+    AI_MODEL_ENABLED: process.env.AI_MODEL_ENABLED,
+    AI_GATEWAY_BASE_URL: process.env.AI_GATEWAY_BASE_URL,
+    AI_GATEWAY_API_KEY: process.env.AI_GATEWAY_API_KEY,
+    AI_WRITING_MODEL: process.env.AI_WRITING_MODEL,
+    AI_MODEL_TIMEOUT_MS: process.env.AI_MODEL_TIMEOUT_MS,
+  };
+  return resolveWritingModelRuntime(workerRuntime, localRuntime);
+}
 
 async function loadPrivateReferences(id: string) {
   const db = getDb();
@@ -87,22 +117,22 @@ export async function POST(request: Request) {
       const outline = buildOutline(documentType, title, recipient, facts, references, privateReferences);
       // 结构化初稿只使用已确认事实、已授权正式依据和私有材料数量；网关绝不接收私有原文、文件名或无权资料。
       const startedAt = Date.now();
-      const generation = await generateWritingWithGateway({ documentType, title, recipient, submittingDepartment: writing.submittingDepartment, facts, referenceQuery, references, privateReferenceCount: privateReferences.length }, env as unknown as Record<string, string | undefined>);
+      const generation = await generateWritingWithGateway({ documentType, title, recipient, submittingDepartment: writing.submittingDepartment, facts, referenceQuery, references, privateReferenceGuidance: privateReferences.map((item) => ({ format: item.parseFormat, excerpt: item.excerpt, locations: item.locations })) }, getWritingModelRuntime());
+      // 模型失败时只记录最小审计，保留已有工作区和正文，不创建或覆盖 writing_versions。
+      if (generation.mode !== "model" || !generation.content) {
+        await writeWritingModelAudit({ db, user, writingId: id, result: generation, elapsedMs: Date.now() - startedAt });
+        return Response.json({ error: writingGenerationError(generation.category) }, { status: 503 });
+      }
       const structured = generation.structured;
-      const generatedText = structuredWritingToText(structured);
+      const generatedText = generation.content;
       const versions = await db.select().from(writingVersions).where(eq(writingVersions.writingDocumentId, id));
       const now = new Date().toISOString(); const checks = checkWriting(title, recipient, facts, outline);
-      // 模型失败时，已有正文必须原样保留；只有尚无版本的空工作区才允许用模拟生成器完成首次正文。
-      if (generation.mode === "fallback" && versions.length > 0) {
-        await writeWritingModelAudit({ db, user, writingId: id, result: generation, elapsedMs: Date.now() - startedAt });
-        return Response.json({ error: "模型生成失败，已保留当前正文，请稍后重试。" }, { status: 503 });
-      }
       const nextVersionNo = Math.max(0, ...versions.map((version) => version.versionNo)) + 1;
-      await db.update(writingDocuments).set({ documentType, title, recipient, facts, referenceQuery, referencesJson: JSON.stringify(references), status: "generated", updatedAt: now }).where(eq(writingDocuments.id, id));
-      await db.insert(writingVersions).values({ id: crypto.randomUUID(), writingDocumentId: id, versionNo: nextVersionNo, stage: "generated", content: generatedText, structuredContentJson: JSON.stringify(structured), checksJson: JSON.stringify(checks), createdByUserId: user.id, createdBy: user.name, createdAt: now });
+      await db.update(writingDocuments).set({ documentType, title, recipient, facts, referenceQuery, referencesJson: "[]", status: "generated", updatedAt: now }).where(eq(writingDocuments.id, id));
+      await db.insert(writingVersions).values({ id: crypto.randomUUID(), writingDocumentId: id, versionNo: nextVersionNo, stage: "generated", content: generatedText, structuredContentJson: structured ? JSON.stringify(structured) : "", checksJson: JSON.stringify(checks), createdByUserId: user.id, createdBy: user.name, createdAt: now });
       await writeWritingModelAudit({ db, user, writingId: id, result: generation, elapsedMs: Date.now() - startedAt });
       await db.insert(auditLogs).values({ id: crypto.randomUUID(), action: "更新公文提纲与引用依据", entityType: "writing_document", entityId: id, operator: user.name, detail: `${documentType}｜引用${references.length}条｜仅工作区`, createdAt: now });
-      return Response.json({ id, outline, generated: structured, references, privateReferences, checks, generation: { mode: generation.mode }, status: writing.status });
+      return Response.json({ id, outline, generated: structured, content: generatedText, references: [], privateReferences, checks, generation: { mode: generation.mode }, status: writing.status });
     }
     if (action === "create") {
       const documentType = String(body.documentType || "") as WritingType;
@@ -114,15 +144,20 @@ export async function POST(request: Request) {
       const references = referenceQuery ? await resolveWritingReferences(user, referenceQuery) : [];
       const outline = buildOutline(documentType, title, recipient, facts, references, []);
       const now = new Date().toISOString(); const id = crypto.randomUUID(); const versionId = crypto.randomUUID(); const startedAt = Date.now();
-      const generation = await generateWritingWithGateway({ documentType, title, recipient, submittingDepartment: user.departmentName, facts, referenceQuery, references, privateReferenceCount: 0 }, env as unknown as Record<string, string | undefined>);
+      const generation = await generateWritingWithGateway({ documentType, title, recipient, submittingDepartment: user.departmentName, facts, referenceQuery, references, privateReferenceGuidance: [] }, getWritingModelRuntime());
+      // 首次模型失败不创建 writing_documents 或 writing_versions，避免失败时留下模拟或空白正文。
+      if (generation.mode !== "model" || !generation.content) {
+        await writeWritingModelAudit({ db, user, writingId: id, result: generation, elapsedMs: Date.now() - startedAt });
+        return Response.json({ error: writingGenerationError(generation.category) }, { status: 503 });
+      }
       const structured = generation.structured;
-      const generatedText = structuredWritingToText(structured);
+      const generatedText = generation.content;
       const checks = checkWriting(title, recipient, facts, outline);
-      await db.insert(writingDocuments).values({ id, documentType, title, submittingDepartment: user.departmentName, recipient, facts, referenceQuery, referencesJson: JSON.stringify(references), status: "outline", createdByUserId: user.id, createdBy: user.name, createdAt: now, updatedAt: now });
-      await db.insert(writingVersions).values({ id: versionId, writingDocumentId: id, versionNo: 1, stage: "generated", content: generatedText, structuredContentJson: JSON.stringify(structured), checksJson: JSON.stringify(checks), createdByUserId: user.id, createdBy: user.name, createdAt: now });
+      await db.insert(writingDocuments).values({ id, documentType, title, submittingDepartment: user.departmentName, recipient, facts, referenceQuery, referencesJson: "[]", status: "outline", createdByUserId: user.id, createdBy: user.name, createdAt: now, updatedAt: now });
+      await db.insert(writingVersions).values({ id: versionId, writingDocumentId: id, versionNo: 1, stage: "generated", content: generatedText, structuredContentJson: structured ? JSON.stringify(structured) : "", checksJson: JSON.stringify(checks), createdByUserId: user.id, createdBy: user.name, createdAt: now });
       await writeWritingModelAudit({ db, user, writingId: id, result: generation, elapsedMs: Date.now() - startedAt });
       await db.insert(auditLogs).values({ id: crypto.randomUUID(), action: "创建公文提纲", entityType: "writing_document", entityId: id, operator: user.name, detail: `${documentType}｜引用${references.length}条｜仅工作区`, createdAt: now });
-      return Response.json({ id, outline, generated: structured, references, privateReferences: [], checks, generation: { mode: generation.mode }, status: "generated" }, { status: 201 });
+      return Response.json({ id, outline, generated: structured, content: generatedText, references: [], privateReferences: [], checks, generation: { mode: generation.mode }, status: "generated" }, { status: 201 });
     }
     if (action === "save_structured") {
       const id = String(body.id || "");

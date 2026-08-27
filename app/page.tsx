@@ -302,7 +302,9 @@ function WritingV2() {
   const [form, setForm] = useState({ documentType: "请示", title: "", recipient: "", facts: "", referenceQuery: "" });
   const [writing, setWriting] = useState<{ id: string; outline: string; references: KnowledgeResult["citations"]; privateReferences: WritingPrivateReference[]; checks: string[] } | null>(null);
   const [structuredContent, setStructuredContent] = useState<StructuredWriting | null>(null);
+  const [plainContent, setPlainContent] = useState("");
   const [notice, setNotice] = useState("");
+  const [generating, setGenerating] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [showOutlineSettings, setShowOutlineSettings] = useState(true);
   const [privateReferenceFiles, setPrivateReferenceFiles] = useState<Array<{ file: File; status: "uploading" | "error"; error?: string }>>([]);
@@ -312,36 +314,47 @@ function WritingV2() {
 
   // 说明：创建提纲时只使用已确认事实、正式知识库授权引用和当前工作区私有参考材料摘要，不自动发文。
   async function createOutline() {
-    const response = await fetch("/api/writing", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: writing ? "update_outline" : "create", ...(writing ? { id: writing.id } : {}), ...form }),
-    });
-    const data = await response.json() as {
-      id?: string;
-      outline?: string;
-      references?: KnowledgeResult["citations"];
-      privateReferences?: WritingPrivateReference[];
-      checks?: string[];
-      generated?: StructuredWriting;
-      generation?: { mode?: "simulation" | "model" | "fallback" };
-      error?: string;
-    };
-    if (!response.ok || !data.id || !data.outline || !data.generated) {
-      setNotice(data.error || "创建提纲失败");
-      return;
+    if (generating) return;
+    setGenerating(true);
+    setNotice("");
+    try {
+      const response = await fetch("/api/writing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: writing ? "update_outline" : "create", ...(writing ? { id: writing.id } : {}), ...form }),
+      });
+      const data = await response.json() as {
+        id?: string;
+        outline?: string;
+        references?: KnowledgeResult["citations"];
+        privateReferences?: WritingPrivateReference[];
+        checks?: string[];
+        generated?: StructuredWriting;
+        content?: string;
+        generation?: { mode?: "model" };
+        error?: string;
+      };
+      if (!response.ok || !data.id || !data.outline || !data.content) {
+        setNotice(data.error || "创建提纲失败");
+        return;
+      }
+      setWriting({
+        id: data.id,
+        outline: data.outline,
+        references: data.references || [],
+        privateReferences: data.privateReferences || [],
+        checks: data.checks || [],
+      });
+      setStructuredContent(data.generated || null);
+      setPlainContent(data.generated ? "" : data.content);
+      window.localStorage.setItem(CURRENT_WRITING_WORKSPACE_KEY, data.id);
+      setShowOutlineSettings(false);
+      setNotice(writing ? "正文已按同一工作区重新生成。" : "正文已生成，可继续人工编辑并多次导出 Word。 ");
+    } catch {
+      setNotice("创建提纲失败，请稍后重试");
+    } finally {
+      setGenerating(false);
     }
-    setWriting({
-      id: data.id,
-      outline: data.outline,
-      references: data.references || [],
-      privateReferences: data.privateReferences || [],
-      checks: data.checks || [],
-    });
-    setStructuredContent(data.generated);
-    window.localStorage.setItem(CURRENT_WRITING_WORKSPACE_KEY, data.id);
-    setShowOutlineSettings(false);
-    setNotice(data.generation?.mode === "fallback" ? "模型暂不可用，已安全使用模拟生成。" : writing ? "正文已按同一工作区重新生成。" : "正文已生成，可继续人工编辑并多次导出 Word。 ");
   }
 
   // 说明：文件选择确认后立刻创建或复用当前用户工作区并上传；工作区仍停留在提纲设置阶段，只有主按钮才会进入正文编辑阶段。
@@ -468,14 +481,14 @@ function WritingV2() {
 
   // 说明：导出前先将当前区块保存到同一工作区，服务端重新校验创建人/管理员权限，再按最新版本生成 Word。
   async function exportWord() {
-    if (!writing || !structuredContent) return;
-    const currentStructured = structuredEditorRef.current ? syncStructuredDocument(structuredEditorRef.current, structuredContent) : structuredContent;
+    if (!writing || (!structuredContent && !plainContent.trim())) return;
+    const currentStructured = structuredContent && structuredEditorRef.current ? syncStructuredDocument(structuredEditorRef.current, structuredContent) : structuredContent;
     setExporting(true);
     setNotice("");
     try {
       const saved = await fetch("/api/writing", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "save_structured", id: writing.id, structured: currentStructured }),
+        body: JSON.stringify(currentStructured ? { action: "save_structured", id: writing.id, structured: currentStructured } : { id: writing.id, content: plainContent }),
       });
       const savedData = await saved.json() as { error?: string; checks?: string[] };
       if (!saved.ok) throw new Error(savedData.error || "保存当前正文失败");
@@ -544,11 +557,13 @@ function WritingV2() {
             {!writing?.privateReferences.length && !privateReferenceFiles.length && <small className="private-reference-hint">支持 Word、Excel、PPT、文本，最多 3 份</small>}
           </div>
         </div>
-        <button className="primary" onClick={() => void createOutline()}>开始正文编写并检索依据</button>
+        <button className="primary writing-generate-button" type="button" disabled={generating} aria-busy={generating} aria-label={generating ? "正在生成" : undefined} onClick={() => void createOutline()}>
+          {generating ? <><span className="writing-generate-sizer" aria-hidden="true">开始正文编写并检索依据</span><span className="writing-generate-loading"><i aria-hidden="true"/>正在生成</span></> : "开始正文编写并检索依据"}
+        </button>
       </section>}
       {notice && <p className="writing-notice">{notice}</p>}
       {writing && !showOutlineSettings && <>
-        {structuredContent && <section className="writing-body structured-writing-body">
+        {structuredContent ? <section className="writing-body structured-writing-body">
           <div className="writing-body-head"><div><h3>完整正文</h3><span>可直接修改文字、段落和表格内容；导出时保存当前文稿。</span></div></div>
           <div ref={structuredEditorRef} className="writing-document" contentEditable suppressContentEditableWarning onInput={(event) => syncStructuredDocument(event.currentTarget, structuredContent)}>
             <header className="writing-document-heading" contentEditable={false}><h1>{structuredContent.title}</h1><p>{structuredContent.documentType}　{structuredContent.recipient || "【待人工核验】"}</p></header>
@@ -560,8 +575,8 @@ function WritingV2() {
               {block.type === "table" && <table><thead><tr>{block.columns.map((column, index) => <th data-writing-table-cell={`${block.id}:-1:${index}`} key={`${block.id}-head-${index}`}>{column}</th>)}</tr></thead><tbody>{block.rows.map((row, rowIndex) => <tr key={`${block.id}-row-${rowIndex}`}>{row.map((cell, columnIndex) => <td data-writing-table-cell={`${block.id}:${rowIndex}:${columnIndex}`} key={`${block.id}-${rowIndex}-${columnIndex}`}>{cell}</td>)}</tr>)}</tbody></table>}
             </div>)}
           </div>
-        </section>}
-        <div className="form-actions writing-editor-actions"><button className="submit" disabled={!structuredContent || exporting} onClick={() => void exportWord()}>{exporting ? "正在导出…" : "导出 Word"}</button></div>
+        </section> : <section className="writing-body structured-writing-body"><div className="writing-body-head"><div><h3>完整正文</h3><span>模型按连续正文返回，可直接全文修改；导出时保存当前文稿。</span></div></div><textarea className="writing-plain-editor" value={plainContent} onChange={(event) => setPlainContent(event.target.value)} aria-label="完整正文编辑区"/></section>}
+        <div className="form-actions writing-editor-actions"><button className="submit" disabled={(!structuredContent && !plainContent.trim()) || exporting} onClick={() => void exportWord()}>{exporting ? "正在导出…" : "导出 Word"}</button></div>
       </>}
     </section>
   </section>;

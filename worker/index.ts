@@ -5,6 +5,12 @@ import handler from "vinext/server/app-router-entry";
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
+  // 智能写作模型仅读取服务端 Worker bindings；本机开发时由 Vinext 将 .env 注入对应的服务端静态变量。
+  AI_MODEL_ENABLED?: string;
+  AI_GATEWAY_BASE_URL?: string;
+  AI_GATEWAY_API_KEY?: string;
+  AI_WRITING_MODEL?: string;
+  AI_MODEL_TIMEOUT_MS?: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {

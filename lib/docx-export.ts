@@ -9,7 +9,7 @@ function escapeXml(value: string) {
 }
 
 function runXml(value: string, options: { bold?: boolean; color?: string; size?: number } = {}) {
-  const properties = [options.bold ? "<w:b/>" : "", options.color ? `<w:color w:val="${options.color}"/>` : "", options.size ? `<w:sz w:val="${options.size}"/><w:szCs w:val="${options.size}"/>` : ""].join("");
+  const properties = ["<w:rFonts w:ascii=\"Times New Roman\" w:hAnsi=\"Times New Roman\" w:eastAsia=\"SimSun\"/>", options.bold ? "<w:b/>" : "", options.color ? `<w:color w:val="${options.color}"/>` : "", options.size ? `<w:sz w:val="${options.size}"/><w:szCs w:val="${options.size}"/>` : ""].join("");
   const text = value.split(/\r?\n/).map((line, index) => `${index ? "<w:br/>" : ""}<w:t xml:space="preserve">${escapeXml(line)}</w:t>`).join("");
   return `<w:r>${properties ? `<w:rPr>${properties}</w:rPr>` : ""}${text}</w:r>`;
 }
@@ -53,11 +53,29 @@ function structuredBodyXml(structured: StructuredWriting) {
   return [paragraphXml(structured.title, { bold: true, align: "center" }), ...metadata.map((item) => paragraphXml(item, { compact: true })), paragraphXml(""), blocks].join("");
 }
 
+// 将非结构化模型正文按自然行输出为独立 Word 段落。输入为完整纯文本，输出不拆分字符或 run；首行标题与当前标题重复时只保留一次。
+function rawBodyXml(input: { title: string; documentType: string; content: string }) {
+  const lines = input.content.replace(/\r\n?/g, "\n").split("\n").map((line) => line.trim()).filter(Boolean);
+  if (lines[0] === input.title.trim()) lines.shift();
+  const paragraphs = lines.map((line) => {
+    if (/^[一二三四五六七八九十]+、/.test(line)) return paragraphXml(line, { headingLevel: 1 });
+    if (/^[（(][一二三四五六七八九十]+[）)]/.test(line)) return paragraphXml(line, { headingLevel: 2 });
+    if (/^\d+[.、]\s*/.test(line)) return paragraphXml(line.replace(/^\d+[.、]\s*/, ""), { numbered: true });
+    return paragraphXml(line);
+  }).join("");
+  return [paragraphXml(input.title, { bold: true, align: "center" }), paragraphXml(`文种：${input.documentType}`, { compact: true }), paragraphXml(""), paragraphs].join("");
+}
+
+// 仅接受包含有效区块数组的结构化对象，防止历史空对象 {} 误走表格/标题结构化导出分支。
+function hasStructuredBlocks(value: StructuredWriting | null | undefined): value is StructuredWriting {
+  return Boolean(value && Array.isArray(value.blocks) && value.blocks.length > 0);
+}
+
 // 生成可由 Word 打开的 DOCX。输入只能来自导出 API 已验证的工作区最新版本与正式引用，输出为二进制压缩包。
 export function createWritingDocx(input: { title: string; documentType: string; finalContent: string; references: WritingExportReference[]; structured?: StructuredWriting | null }) {
-  const body = input.structured
+  const body = hasStructuredBlocks(input.structured)
     ? structuredBodyXml(input.structured)
-    : [paragraphXml(input.title, { bold: true, align: "center" }), paragraphXml(`文种：${input.documentType}`, { compact: true }), paragraphXml(""), ...input.finalContent.split(/\n{2,}/).map((paragraph) => paragraphXml(paragraph))].join("");
+    : rawBodyXml({ title: input.title, documentType: input.documentType, content: input.finalContent });
   const appendix = input.references.length
     ? [paragraphXml("附录：正式引用依据（仅供核验）", { bold: true, headingLevel: 1 }), ...input.references.map((item, index) => paragraphXml(`[${index + 1}] 《${item.title}》V${item.version}.0 · ${item.sourceType} · ${item.location}`, { compact: true }))].join("")
     : "";

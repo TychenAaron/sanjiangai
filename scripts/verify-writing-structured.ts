@@ -41,4 +41,10 @@ assert(documentXml.includes("<w:numPr>"), "DOCX 编号列表不是 Word 编号 X
 assert(documentXml.includes("<w:tbl>"), "DOCX 表格不是 Word 表格 XML");
 assert(documentXml.includes("本机测试正式依据"), "正式引用附录未写入 DOCX");
 assert(!documentXml.includes("私有参考材料.docx"), "私有参考材料泄露到 DOCX");
+const rawContent = "本机虚构连续正文验收\n一、背景与必要性\n本机虚构第一段，用于验证自然段分页与中文显示。\n（二）工作安排\n本机虚构第二段，内容完整且不涉及真实资料。\n1. 本机虚构编号事项。\n【待人工核验】本机虚构待核验提示。\n请结合本机情况组织落实。";
+const rawArchive = unzipSync(createWritingDocx({ title: "本机虚构连续正文验收", documentType: "通知", finalContent: rawContent, references: [], structured: {} as never }));
+const rawXml = strFromU8(rawArchive["word/document.xml"]);
+assert(rawXml.includes("本机虚构第二段") && rawXml.includes("【待人工核验】"), "连续正文 DOCX 缺少完整文本");
+assert((rawXml.match(/本机虚构连续正文验收/g) || []).length === 1, "连续正文 DOCX 重复导出标题");
+assert((rawXml.match(/<w:p>/g) || []).length >= 8, "连续正文必须按自然行生成多个 Word 段落");
 console.log("PASS 三种虚构文种均生成结构化正文；DOCX 含真实编号、表格和正式引用附录，且未包含私有材料。");
