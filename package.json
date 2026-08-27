@@ -23,7 +23,8 @@
     "generate:writing-reference-fixtures": "node --experimental-strip-types scripts/generate-writing-reference-fixtures.ts",
     "verify:local:writing": "node --experimental-strip-types scripts/verify-local-writing.ts",
     "verify:local:writing-export": "node --experimental-strip-types scripts/verify-local-writing-export.ts",
-    "verify:writing-structured": "node --experimental-strip-types scripts/verify-writing-structured.ts"
+    "verify:writing-structured": "node --experimental-strip-types scripts/verify-writing-structured.ts",
+    "verify:writing-model-gateway": "node --experimental-strip-types scripts/verify-writing-model-gateway.ts"
   },
   "dependencies": {
     "@mdgate/ppt": "0.6.20",

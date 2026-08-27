@@ -324,6 +324,7 @@ function WritingV2() {
       privateReferences?: WritingPrivateReference[];
       checks?: string[];
       generated?: StructuredWriting;
+      generation?: { mode?: "simulation" | "model" | "fallback" };
       error?: string;
     };
     if (!response.ok || !data.id || !data.outline || !data.generated) {
@@ -340,7 +341,7 @@ function WritingV2() {
     setStructuredContent(data.generated);
     window.localStorage.setItem(CURRENT_WRITING_WORKSPACE_KEY, data.id);
     setShowOutlineSettings(false);
-    setNotice(writing ? "正文已按同一工作区重新生成。" : "正文已生成，可继续人工编辑并多次导出 Word。 ");
+    setNotice(data.generation?.mode === "fallback" ? "模型暂不可用，已安全使用模拟生成。" : writing ? "正文已按同一工作区重新生成。" : "正文已生成，可继续人工编辑并多次导出 Word。 ");
   }
 
   // 说明：文件选择确认后立刻创建或复用当前用户工作区并上传；工作区仍停留在提纲设置阶段，只有主按钮才会进入正文编辑阶段。
@@ -454,7 +455,11 @@ function WritingV2() {
       blocks: source.blocks.map((block) => {
         if (block.type === "heading" || block.type === "paragraph" || block.type === "notice") return { ...block, text: textByBlock.has(block.id) ? textByBlock.get(block.id) || "" : "" };
         if (block.type === "numbered_list") return { ...block, items: listByBlock.has(block.id) ? listByBlock.get(block.id) || [] : [] };
-        const table = tableByBlock.get(block.id); return table ? { ...block, columns: table.columns.length ? table.columns : block.columns, rows: table.rows.length ? table.rows : block.rows } : block;
+        if (block.type === "table") {
+          const table = tableByBlock.get(block.id);
+          return table ? { ...block, columns: table.columns.length ? table.columns : block.columns, rows: table.rows.length ? table.rows : block.rows } : block;
+        }
+        return block;
       }),
     };
     setStructuredContent(next);

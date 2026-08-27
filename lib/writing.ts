@@ -18,7 +18,10 @@ export type WritingPrivateReferenceSummary = {
 // 说明：仅检索当前账号有权、已审核且达到可靠门槛的正式资料，输出可用于公文写作展示的有限引用信息。
 export async function resolveWritingReferences(user: AccessUser, query: string) {
   const matches = await retrieveAuthorized(user, query);
-  return matches.map((row): KnowledgeCitation => ({
+  return matches
+    // 写作模型和 Word 引用均不允许使用 D4 级资料，即使当前账号对该资料有读取权限也必须在此边界排除。
+    .filter((row) => row.document.securityLevel !== "D4")
+    .map((row): KnowledgeCitation => ({
     documentId: row.document.id,
     title: row.document.title,
     version: row.versionNo,
@@ -27,7 +30,7 @@ export async function resolveWritingReferences(user: AccessUser, query: string) 
     chunkIndex: row.chunk.chunkIndex,
     location: `第${row.chunk.chunkIndex + 1}段`,
     score: Number(row.score.toFixed(1)),
-  }));
+    }));
 }
 
 // 说明：把当前工作区私有参考材料的数据库记录整理成页面和提纲都能复用的摘要结构，不读取正式知识库。
