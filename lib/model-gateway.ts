@@ -60,7 +60,7 @@ export function readModelGatewayConfig(runtime: ModelGatewayRuntime): ModelGatew
 
 // 说明：将有限引用裁剪为模型上下文，输入是本次真实 citations，输出是带编号的只读材料。
 // 不传递数据库、完整文件、待审核资料、无权资料、系统配置或用户权限信息，降低越权与提示注入风险。
-export function buildGroundedMessages(query: string, citations: ModelGatewayCitation[]) {
+export function buildGroundedMessages(query: string, citations: ModelGatewayCitation[], history: Array<{ role: "assistant"; content: string }> = []) {
   const materials = citations.map((citation, index) => (
     `[${index + 1}]《${citation.title}》V${citation.version}.0 ${citation.sourceType} ${citation.location}\n${citation.excerpt}`
   )).join("\n\n");
@@ -72,7 +72,7 @@ export function buildGroundedMessages(query: string, citations: ModelGatewayCita
     },
     {
       role: "user",
-      content: `问题：${query}\n\n已完成账号权限和可靠依据筛选的资料：\n${materials}`,
+      content: `当前问题：${query}\n\n仅供理解上下文的有效历史回答：\n${history.slice(-4).map((item, index) => `${index + 1}. ${item.content.slice(0, 500)}`).join("\n") || "无"}\n\n已完成账号权限和可靠依据筛选的本次资料：\n${materials}`,
     },
   ];
 }
@@ -91,6 +91,7 @@ export async function callModelGateway(
   query: string,
   citations: ModelGatewayCitation[],
   gatewayFetch: GatewayFetch = fetch,
+  history: Array<{ role: "assistant"; content: string }> = [],
 ): Promise<ModelGatewayResult> {
   if (!config.configured) return { status: "not_configured" };
 
@@ -108,7 +109,7 @@ export async function callModelGateway(
         model: config.model,
         temperature: 0.1,
         max_tokens: MAX_MODEL_TOKENS,
-        messages: buildGroundedMessages(query, citations),
+        messages: buildGroundedMessages(query, citations, history),
       }),
     });
     if (!response.ok) return { status: "gateway_error" };
@@ -137,6 +138,7 @@ export async function resolveGroundedAnswer(
   citations: ModelGatewayCitation[],
   config: ModelGatewayConfig,
   gatewayFetch: GatewayFetch = fetch,
+  history: Array<{ role: "assistant"; content: string }> = [],
 ): Promise<GroundedAnswerResult> {
   if (!citations.length) {
     return {
@@ -146,7 +148,7 @@ export async function resolveGroundedAnswer(
     };
   }
 
-  const gatewayResult = await callModelGateway(config, query, citations, gatewayFetch);
+  const gatewayResult = await callModelGateway(config, query, citations, gatewayFetch, history);
   if (gatewayResult.status === "success") return { answer: gatewayResult.answer, mode: "model", model: config.model };
 
   const extracts = citations.slice(0, 3).map((citation, index) => (

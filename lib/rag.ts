@@ -17,6 +17,7 @@ const DEFAULT_MIN_RELIABLE_SCORE = 12;
 
 export type KnowledgeCitation = {
   documentId: string;
+  versionId: string;
   title: string;
   category: string;
   sourceOrganization: string | null;
@@ -69,6 +70,7 @@ export async function retrieveAuthorized(user: AccessUser, query: string) {
     db.select({
       chunk: documentChunks,
       document: documents,
+      versionId: documentVersions.id,
       versionNo: documentVersions.versionNo,
     }).from(documentChunks)
       .innerJoin(documents, eq(documentChunks.documentId, documents.id))
@@ -91,13 +93,13 @@ export async function retrieveAuthorized(user: AccessUser, query: string) {
 
 // 说明：以真实 citations 生成最终问答模式，输入是已经完成权限与可靠依据筛选的引用，输出是 no_basis、extractive 或 model。
 // 没有引用时绝不调用网关；网关超时、异常或引用不合格时不展示模型文本，而是安全回退到原文摘录。
-export async function answerFromCitations(query: string, citations: KnowledgeCitation[]) {
+export async function answerFromCitations(query: string, citations: KnowledgeCitation[], history: Array<{ role: "assistant"; content: string }> = []) {
   const config = readModelGatewayConfig(env as unknown as Record<string, string | undefined>);
   if (!citations.length) return { answer: "当前无可引用的正式资料，建议补充或检索已批准知识资源。", mode: "no_basis" as const, model: config.model, citations };
   const modelCitations: ModelGatewayCitation[] = citations.map(({ title, version, sourceType, location, excerpt }) => ({ title, version, sourceType, location, excerpt }));
   // 已配置的模型出现传输、超时或空响应时不回退成模型外推内容，仅保留已授权引用供用户核对。
   if (config.configured) {
-    const result = await callModelGateway(config, query, modelCitations);
+    const result = await callModelGateway(config, query, modelCitations, undefined, history);
     if (result.status === "success") return { answer: result.answer, mode: "model" as const, model: config.model, citations };
     return { answer: "回答服务暂时不可用，未生成回答，请稍后重试。", mode: "failed" as const, model: config.model, citations };
   }
@@ -105,10 +107,11 @@ export async function answerFromCitations(query: string, citations: KnowledgeCit
   return { ...result, citations };
 }
 
-export async function answerKnowledge(user: AccessUser, query: string) {
+export async function answerKnowledge(user: AccessUser, query: string, history: Array<{ role: "assistant"; content: string }> = []) {
   const matches = await retrieveAuthorized(user, query);
   const citations: KnowledgeCitation[] = matches.map(row => ({
     documentId: row.document.id,
+    versionId: row.versionId,
     title: row.document.title,
     category: row.document.resourceCategory,
     sourceOrganization: row.document.sourceOrganization,
@@ -122,7 +125,7 @@ export async function answerKnowledge(user: AccessUser, query: string) {
     location: `第${row.chunk.chunkIndex + 1}段`,
     score: Number(row.score.toFixed(1)),
   }));
-  return answerFromCitations(query, citations);
+  return answerFromCitations(query, citations, history);
 }
 
 export function modelGatewayStatus() {

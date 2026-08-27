@@ -94,6 +94,22 @@ export const auditLogs = sqliteTable("audit_logs", {
   operator: text("operator").notNull().default("项目管理员"), detail: text("detail").notNull(), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => [index("audit_logs_created_at_idx").on(table.createdAt)]);
 
+// 知识会话仅保存用户提问、系统回答与最小引用快照；正式资料正文仍只保留在 documents/document_chunks。
+export const knowledgeConversations = sqliteTable("knowledge_conversations", {
+  id: text("id").primaryKey(), createdByUserId: text("created_by_user_id").notNull(), title: text("title").notNull(),
+  deletedAt: text("deleted_at"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`), updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [index("knowledge_conversations_owner_idx").on(table.createdByUserId), index("knowledge_conversations_updated_idx").on(table.updatedAt)]);
+
+export const knowledgeMessages = sqliteTable("knowledge_messages", {
+  id: text("id").primaryKey(), conversationId: text("conversation_id").notNull(), role: text("role").notNull(), content: text("content").notNull(),
+  mode: text("mode").notNull(), errorStatus: text("error_status"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [index("knowledge_messages_conversation_idx").on(table.conversationId)]);
+
+export const knowledgeMessageCitations = sqliteTable("knowledge_message_citations", {
+  id: text("id").primaryKey(), messageId: text("message_id").notNull(), documentId: text("document_id").notNull(), versionId: text("version_id").notNull(),
+  chunkIndex: integer("chunk_index").notNull(), title: text("title").notNull(), category: text("category").notNull(), sourceOrganization: text("source_organization"), documentDate: text("document_date"), location: text("location").notNull(), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [index("knowledge_message_citations_message_idx").on(table.messageId), index("knowledge_message_citations_document_idx").on(table.documentId)]);
+
 // 公文工作区仅保存待人工处理的写作材料，不会自动进入 documents 正式知识库。
 export const writingDocuments = sqliteTable("writing_documents", {
   id: text("id").primaryKey(), documentType: text("document_type").notNull(), title: text("title").notNull(),

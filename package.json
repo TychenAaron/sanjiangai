@@ -24,6 +24,7 @@
     "generate:writing-reference-fixtures": "node --experimental-strip-types scripts/generate-writing-reference-fixtures.ts",
     "verify:knowledge-resource-parsing": "node --experimental-strip-types scripts/verify-knowledge-resource-parsing.ts",
     "verify:knowledge-grounded-chat": "node --experimental-strip-types scripts/verify-knowledge-grounded-chat.ts",
+    "verify:knowledge-conversations": "node --experimental-strip-types scripts/verify-knowledge-conversations.ts",
     "verify:local:writing": "node --experimental-strip-types scripts/verify-local-writing.ts",
     "verify:local:writing-export": "node --experimental-strip-types scripts/verify-local-writing-export.ts",
     "verify:writing-structured": "node --experimental-strip-types scripts/verify-writing-structured.ts",

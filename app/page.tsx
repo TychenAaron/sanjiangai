@@ -2,7 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-type View = "工作台" | "智能搜索" | "知识会话" | "智能写作" | "政策中心" | "知识资源" | "建设总览" | "权限中心" | "治理后台";
+type View = "工作台" | "知识会话" | "智能写作" | "政策中心" | "知识资源" | "建设总览" | "权限中心" | "治理后台";
 type IconName = "home" | "chat" | "pen" | "policy" | "folder" | "admin" | "search" | "send" | "shield" | "arrow" | "refresh";
 
 type DocumentRecord = {
@@ -52,6 +52,8 @@ type SearchResult = {
   documentId: string; title: string; documentType: string; sourceType: string; ownerDepartment: string;
   securityLevel: string; version: number; excerpt: string; score: number;
 };
+type ConversationSummary = { id: string; title: string; updatedAt: string };
+type ConversationMessage = { id: string; role: "user" | "assistant"; content: string; mode: "answer" | "search"; citations: KnowledgeResult["citations"]; invalidated?: boolean };
 type LocalTestAccount = { key: "admin" | "staff" | "manager" | "finance"; email: string; name: string };
 type LocalTestAccountRecord = SessionUser & { readableLevels: string[] };
 
@@ -75,7 +77,6 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
 
 const nav: { label: View; icon: IconName }[] = [
   { label: "工作台", icon: "home" },
-  { label: "智能搜索", icon: "search" },
   { label: "知识会话", icon: "chat" },
   { label: "智能写作", icon: "pen" },
   { label: "政策中心", icon: "policy" },
@@ -97,6 +98,8 @@ export default function Home() {
   const [knowledgePhase, setKnowledgePhase] = useState<"retrieving" | "organizing">("retrieving");
   const knowledgeProgressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [askError, setAskError] = useState("");
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [docType, setDocType] = useState("请示");
   const [records, setRecords] = useState<DocumentRecord[]>([]);
   const [summary, setSummary] = useState<DocumentSummary>({ total: 0, pending: 0, approved: 0, draft: 0 });
@@ -119,6 +122,7 @@ export default function Home() {
     } catch (error) { setDataError(error instanceof Error ? error.message : "读取资料失败"); }
     finally { setDataLoading(false); }
   }, []);
+  const refreshConversations = useCallback(async () => { try { const response = await fetch("/api/knowledge/conversations", { cache: "no-store" }); const data = await response.json() as { conversations?: ConversationSummary[] }; if (response.ok) setConversations(data.conversations || []); } catch { /* 会话列表读取失败不影响资料权限页面。 */ } }, []);
 
   // 说明：切换本机测试身份后重新读取服务端会话和资料列表。
   // 输入为空，输出是更新后的当前账号和已按权限过滤的资料；正式登录流程也复用同一读取方式。
@@ -129,12 +133,13 @@ export default function Home() {
       setCurrentUser(result.user);
       setSessionError("");
       await refreshRecords();
+      await refreshConversations();
     } else {
       setCurrentUser(null);
       setSessionError(result.error || "无法识别登录账号");
       setDataLoading(false);
     }
-  }, [refreshRecords]);
+  }, [refreshConversations, refreshRecords]);
 
   useEffect(() => {
     const refreshTimer = window.setTimeout(() => { void refreshSessionAndRecords(); }, 0);
@@ -149,10 +154,11 @@ export default function Home() {
     setLastQuestion(question); setKnowledgeResult(null); setAskError(""); setKnowledgePhase("retrieving"); setAsking(true);
     knowledgeProgressTimer.current = setTimeout(() => setKnowledgePhase("organizing"), 450);
     try {
-      const response = await fetch("/api/knowledge/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: question }) });
-      const result = await response.json() as KnowledgeResult & { error?: string };
+      const response = await fetch("/api/knowledge/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: question, conversationId: conversationId || undefined }) });
+      const result = await response.json() as KnowledgeResult & { error?: string; conversationId?: string };
       if (!response.ok) throw new Error(result.error || "知识检索失败");
       setKnowledgeResult(result);
+      if (result.conversationId) { setConversationId(result.conversationId); await refreshConversations(); }
     } catch (error) { setAskError(error instanceof Error ? error.message : "知识检索失败"); }
     finally { if (knowledgeProgressTimer.current) clearTimeout(knowledgeProgressTimer.current); setAsking(false); }
   }
@@ -178,8 +184,7 @@ export default function Home() {
         <div className="content">
           {sessionError && <div className="access-blocked"><Icon name="shield" size={30}/><h2>当前账号暂不能进入资料库</h2><p>{sessionError}</p><span>请由系统管理员在“权限中心”按登录邮箱配置员工级别、部门和数据权限。</span></div>}
           {!sessionError && view === "工作台" && <Dashboard greeting={greeting} userName={currentUser?.name || "员工"} query={query} setQuery={setQuery} ask={ask} docType={docType} setDocType={setDocType} go={setView} records={records} summary={summary} dataLoading={dataLoading}/>} 
-          {!sessionError && view === "智能搜索" && <IntelligentSearch/>}
-          {!sessionError && view === "知识会话" && <Knowledge query={query} setQuery={setQuery} lastQuestion={lastQuestion} result={knowledgeResult} asking={asking} phase={knowledgePhase} error={askError} ask={ask}/>}
+          {!sessionError && view === "知识会话" && <Knowledge query={query} setQuery={setQuery} lastQuestion={lastQuestion} result={knowledgeResult} asking={asking} phase={knowledgePhase} error={askError} ask={ask} conversations={conversations} conversationId={conversationId} setConversationId={setConversationId} refreshConversations={refreshConversations}/>}
           {!sessionError && view === "政策中心" && <PolicyCenter/>}
           {!sessionError && view === "智能写作" && <WritingV2/>}
           {!sessionError && view === "知识资源" && <Library user={currentUser} records={records} loading={dataLoading} error={dataError} refresh={refreshRecords}/>} 
@@ -268,13 +273,23 @@ function IntelligentSearch() {
     <div className="search-results">{!searched ? <div className="panel search-empty"><Icon name="search" size={30}/><h2>从正式知识中查找原文</h2><p>搜索结果保留文件来源、版本、责任部门和权限级别，便于核对与追溯。</p></div> : visible.length === 0 ? <div className="panel search-empty"><h2>没有找到可靠结果</h2><p>请更换关键词，或联系知识管理员补充并审核相关资料。</p></div> : visible.map((item, index) => <article className="panel search-result" key={`${item.documentId}-${index}`}><div className="result-rank">{String(index + 1).padStart(2,"0")}</div><div><header><h2>{item.title}</h2><em>V{item.version}.0</em></header><p>{item.excerpt}</p><footer><span>{item.documentType}</span><span>{item.sourceType}</span><span>{item.ownerDepartment}</span><span>{item.securityLevel}</span><b>相关度 {item.score}</b></footer></div></article>)}</div>
   </section>;
 }
+// 原独立检索组件保留在文件中供迁移对照，但不再作为页面入口；实际检索已合并到知识会话。
+void IntelligentSearch;
 
-function Knowledge({ query, setQuery, lastQuestion, result, asking, phase, error, ask }: {
-  query: string; setQuery: (v:string)=>void; lastQuestion: string; result: KnowledgeResult | null; asking: boolean; phase: "retrieving" | "organizing"; error: string; ask:(e:FormEvent)=>void;
+function Knowledge({ query, setQuery, lastQuestion, result, asking, phase, error, ask, conversations, conversationId, setConversationId, refreshConversations }: {
+  query: string; setQuery: (v:string)=>void; lastQuestion: string; result: KnowledgeResult | null; asking: boolean; phase: "retrieving" | "organizing"; error: string; ask:(e:FormEvent)=>void; conversations: ConversationSummary[]; conversationId: string | null; setConversationId: (value: string | null) => void; refreshConversations: () => Promise<void>;
 }) {
   const [preview, setPreview] = useState<{ key: string; content: string } | null>(null);
   const [previewError, setPreviewError] = useState("");
   const [previewing, setPreviewing] = useState("");
+  const [mode, setMode] = useState<"answer" | "search">("answer");
+  const [searchResults, setSearchResults] = useState<Array<{ title: string; category: string; sourceOrganization: string | null; documentDate: string | null; location: string; excerpt: string }>>([]);
+  const [searching, setSearching] = useState(false);
+  const [history, setHistory] = useState<ConversationMessage[]>([]);
+  useEffect(() => { if (!conversationId) return; void (async () => { const response = await fetch(`/api/knowledge/conversations/${conversationId}`, { cache: "no-store" }); const data = await response.json() as { messages?: ConversationMessage[] }; if (response.ok) setHistory(data.messages || []); })(); }, [conversationId]);
+  async function createConversation() { const response = await fetch("/api/knowledge/conversations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: "新建会话" }) }); const data = await response.json() as { conversation?: ConversationSummary }; if (response.ok && data.conversation) { setConversationId(data.conversation.id); setHistory([]); setQuery(""); setSearchResults([]); await refreshConversations(); } }
+  async function deleteConversation(id: string) { if (!window.confirm("确认删除此会话？")) return; const response = await fetch(`/api/knowledge/conversations/${id}`, { method: "DELETE" }); if (response.ok) { if (conversationId === id) { setConversationId(null); setHistory([]); } await refreshConversations(); } }
+  async function search(event: FormEvent) { event.preventDefault(); const value = query.trim(); if (!value || searching) return; setSearching(true); try { const response = await fetch("/api/knowledge/search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: value, conversationId: conversationId || undefined }) }); const data = await response.json() as { results?: typeof searchResults; conversationId?: string; error?: string }; if (!response.ok) throw new Error(data.error || "资料检索失败"); setSearchResults(data.results || []); if (data.conversationId) setConversationId(data.conversationId); await refreshConversations(); } finally { setSearching(false); } }
   // 点击引用后重新请求服务端；服务端会再次校验当前资料状态和当前用户权限，不复用旧页面数据。
   async function openCitation(citation: KnowledgeResult["citations"][number]) {
     const key = `${citation.documentId}-${citation.chunkIndex}`;
@@ -288,18 +303,22 @@ function Knowledge({ query, setQuery, lastQuestion, result, asking, phase, error
     } catch (loadError) { setPreviewError(loadError instanceof Error ? loadError.message : "引用预览暂不可用"); }
     finally { setPreviewing(""); }
   }
-  return <section className="page">
+  return <section className="page knowledge-workspace">
     <PageTitle kicker="知识中枢" title="知识会话" text="通过RAG只依据员工有权查看的正式资料回答，并显示来源、版本和原文片段。"/>
     <div className="retrieval-status"><span><i/>账号权限过滤已启用</span><span><i/>引用溯源已启用</span><span className="waiting"><i/>Qwen3.8-27B等待私有模型网关</span></div>
+    <div className="conversation-list panel"><button onClick={() => void createConversation()}>＋ 新建会话</button>{conversations.map(item => <div key={item.id} className={conversationId === item.id ? "active" : ""}><button onClick={() => setConversationId(item.id)} title={item.title}>{item.title}</button><small>{formatDate(item.updatedAt)}</small><button aria-label="删除会话" onClick={() => void deleteConversation(item.id)}>×</button></div>)}</div>
     <div className="chat-panel">
-      {!lastQuestion && !asking ? <div className="empty"><i><Icon name="chat" size={30}/></i><h2>您想查询什么？</h2><p>请先上传并审核一份脱敏资料。系统会先核验账号权限，再检索正式知识。</p></div> :
+      <div className="knowledge-mode"><button className={mode === "answer" ? "active" : ""} onClick={() => setMode("answer")}>智能问答</button><button className={mode === "search" ? "active" : ""} onClick={() => setMode("search")}>资料检索</button></div>
+      {!lastQuestion && !asking && history.length === 0 ? <div className="empty"><i><Icon name="chat" size={30}/></i><h2>您想查询什么？</h2><p>请先上传并审核一份脱敏资料。系统会先核验账号权限，再检索正式知识。</p></div> :
       <div className="conversation"><div className="question">{lastQuestion}</div>
+        {history.map(message => <div className={message.role === "user" ? "question" : "answer"} key={message.id}><i>{message.role === "user" ? "我" : "AI"}</i><div><p>{message.content}</p>{message.role === "assistant" && message.citations.length > 0 && <section><strong>参考依据</strong>{message.citations.map((citation, index) => <small key={`${citation.documentId}-${index}`}>[{index + 1}]《{citation.title}》 · {citation.location}</small>)}</section>}</div></div>)}
         {asking && <div className="answer loading-answer"><i>AI</i><div><p>{phase === "retrieving" ? "正在检索正式资料…" : "正在整理回答…"}</p></div></div>}
         {error && <div className="answer"><i>!</i><div><p>{error}</p></div></div>}
           {result && <div className="answer"><i>AI</i><div><div className={`answer-mode ${result.mode}`}>{result.mode === "model" ? "依据问答" : result.mode === "extractive" ? "原文摘录" : result.mode === "failed" ? "回答暂不可用" : "暂无可靠依据"}</div>{result.answer.split("\n").filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
           {result.citations.length > 0 && <section><strong>参考依据</strong>{result.citations.map((citation, index) => { const key = `${citation.documentId}-${citation.chunkIndex}`; return <article className="citation" key={`${citation.documentId}-${index}`}><button onClick={() => void openCitation(citation)} disabled={previewing === key}>[{index + 1}]《{citation.title}》 · {citation.category} · {citation.sourceOrganization || "来源单位待补充"} · {citation.documentDate || "日期待补充"} · {citation.location}</button>{previewing === key && <p>正在读取片段…</p>}{preview?.key === key && <p>{preview.content}</p>}</article>; })}{previewError && <p>{previewError}</p>}</section>}</div></div>}
       </div>}
-      <form className="chat-input" onSubmit={ask}><input value={query} onChange={e => setQuery(e.target.value)} placeholder="输入问题，按回车发送"/><button aria-label="发送"><Icon name="send"/></button></form>
+      {mode === "search" && <div className="search-results">{searchResults.length === 0 ? <p>输入关键词后，仅检索您有权访问的正式资料。</p> : searchResults.map((item, index) => <article className="citation" key={`${item.title}-${index}`}><strong>《{item.title}》 · {item.category}</strong><small>{item.sourceOrganization || "来源单位待补充"} · {item.documentDate || "日期待补充"} · {item.location}</small><p>{item.excerpt}</p></article>)}</div>}
+      <form className="chat-input" onSubmit={mode === "answer" ? ask : search}><input value={query} onChange={e => setQuery(e.target.value)} placeholder={mode === "answer" ? "输入问题，按回车发送" : "输入关键词，检索正式资料"}/><button aria-label="发送" disabled={asking || searching}><Icon name="send"/></button></form>
     </div>
   </section>;
 }
