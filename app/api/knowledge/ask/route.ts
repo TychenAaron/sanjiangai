@@ -18,6 +18,8 @@ export async function POST(request: Request) {
       id: crypto.randomUUID(), action: "知识问答检索", entityType: "knowledge_query", entityId: crypto.randomUUID(), operator: user.name,
       detail: `问题长度${query.length}｜引用${result.citations.length}条｜模式${result.mode}`, createdAt: new Date().toISOString(),
     });
-    return Response.json(result);
+    // 浏览器默认只获得可追溯元数据；正文片段必须在用户点击引用时重新走权限校验接口读取。
+    const citations = result.citations.map((citation) => ({ documentId: citation.documentId, title: citation.title, category: citation.category, sourceOrganization: citation.sourceOrganization, documentDate: citation.documentDate, version: citation.version, sourceType: citation.sourceType, chunkIndex: citation.chunkIndex, location: citation.location, score: citation.score }));
+    return Response.json({ ...result, citations });
   } catch (error) { return accessError(error, "知识检索失败"); }
 }

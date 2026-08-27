@@ -5,6 +5,7 @@ import { documentAcl, documentChunks, documents, documentVersions } from "../db/
 import { AccessUser, canReadDocument } from "./access";
 import {
   publicModelGatewayStatus,
+  callModelGateway,
   readModelGatewayConfig,
   resolveGroundedAnswer,
   type ModelGatewayCitation,
@@ -17,6 +18,9 @@ const DEFAULT_MIN_RELIABLE_SCORE = 12;
 export type KnowledgeCitation = {
   documentId: string;
   title: string;
+  category: string;
+  sourceOrganization: string | null;
+  documentDate: string | null;
   version: number;
   excerpt: string;
   sourceType: string;
@@ -70,7 +74,7 @@ export async function retrieveAuthorized(user: AccessUser, query: string) {
       .innerJoin(documents, eq(documentChunks.documentId, documents.id))
       .innerJoin(documentVersions, eq(documentChunks.versionId, documentVersions.id))
       // 正式检索只读取已批准、有效、非 D4 且可靠性达标的当前版本；其余状态即使已有分段也不会参与评分或模型输入。
-      .where(and(eq(documents.knowledgeStatus, "approved"), eq(documents.resourceStatus, "approved"), eq(documents.lifecycleStatus, "effective"), ne(documents.securityLevel, "D4"), gte(documents.reliabilityScore, 60), eq(documentVersions.versionStatus, "approved")))
+      .where(and(eq(documents.knowledgeStatus, "approved"), eq(documents.resourceStatus, "approved"), eq(documents.lifecycleStatus, "effective"), eq(documents.parseStatus, "parsed"), eq(documents.indexStatus, "ready"), ne(documents.securityLevel, "D4"), gte(documents.reliabilityScore, 60), eq(documentVersions.versionStatus, "approved")))
       .limit(3000),
   ]);
   const reliableScore = minimumReliableScore();
@@ -89,7 +93,14 @@ export async function retrieveAuthorized(user: AccessUser, query: string) {
 // 没有引用时绝不调用网关；网关超时、异常或引用不合格时不展示模型文本，而是安全回退到原文摘录。
 export async function answerFromCitations(query: string, citations: KnowledgeCitation[]) {
   const config = readModelGatewayConfig(env as unknown as Record<string, string | undefined>);
+  if (!citations.length) return { answer: "当前无可引用的正式资料，建议补充或检索已批准知识资源。", mode: "no_basis" as const, model: config.model, citations };
   const modelCitations: ModelGatewayCitation[] = citations.map(({ title, version, sourceType, location, excerpt }) => ({ title, version, sourceType, location, excerpt }));
+  // 已配置的模型出现传输、超时或空响应时不回退成模型外推内容，仅保留已授权引用供用户核对。
+  if (config.configured) {
+    const result = await callModelGateway(config, query, modelCitations);
+    if (result.status === "success") return { answer: result.answer, mode: "model" as const, model: config.model, citations };
+    return { answer: "回答服务暂时不可用，未生成回答，请稍后重试。", mode: "failed" as const, model: config.model, citations };
+  }
   const result = await resolveGroundedAnswer(query, modelCitations, config);
   return { ...result, citations };
 }
@@ -99,7 +110,11 @@ export async function answerKnowledge(user: AccessUser, query: string) {
   const citations: KnowledgeCitation[] = matches.map(row => ({
     documentId: row.document.id,
     title: row.document.title,
+    category: row.document.resourceCategory,
+    sourceOrganization: row.document.sourceOrganization,
+    documentDate: row.document.documentDate,
     version: row.versionNo,
+    // 引用摘要只用于已完成权限过滤的模型上下文；浏览器默认不接收，预览需通过单独权限接口重新读取。
     excerpt: row.chunk.content.slice(0, 520),
     sourceType: row.document.sourceType,
     chunkIndex: row.chunk.chunkIndex,

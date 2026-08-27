@@ -19,9 +19,9 @@ type DocumentVersion = { id: string; versionNo: number; content: string; changeS
 type SessionUser = { id: string; name: string; email: string; employeeNo: string | null; departmentName: string; role: string; positionLevel: number; clearanceLevel: number; status: string };
 type KnowledgeResult = {
   answer: string;
-  mode: "model" | "extractive" | "no_basis";
+  mode: "model" | "extractive" | "no_basis" | "failed";
   model: string;
-  citations: Array<{ documentId: string; title: string; version: number; excerpt: string; sourceType: string; chunkIndex: number; location: string; score: number }>;
+  citations: Array<{ documentId: string; title: string; category: string; sourceOrganization: string | null; documentDate: string | null; version: number; sourceType: string; chunkIndex: number; location: string; score: number }>;
 };
 type WritingPrivateReference = {
   id: string;
@@ -94,6 +94,8 @@ export default function Home() {
   const [lastQuestion, setLastQuestion] = useState("");
   const [knowledgeResult, setKnowledgeResult] = useState<KnowledgeResult | null>(null);
   const [asking, setAsking] = useState(false);
+  const [knowledgePhase, setKnowledgePhase] = useState<"retrieving" | "organizing">("retrieving");
+  const knowledgeProgressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [askError, setAskError] = useState("");
   const [docType, setDocType] = useState("请示");
   const [records, setRecords] = useState<DocumentRecord[]>([]);
@@ -144,14 +146,15 @@ export default function Home() {
     const question = query.trim();
     if (!question || asking) return;
     setView("知识会话");
-    setLastQuestion(question); setKnowledgeResult(null); setAskError(""); setAsking(true);
+    setLastQuestion(question); setKnowledgeResult(null); setAskError(""); setKnowledgePhase("retrieving"); setAsking(true);
+    knowledgeProgressTimer.current = setTimeout(() => setKnowledgePhase("organizing"), 450);
     try {
       const response = await fetch("/api/knowledge/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: question }) });
       const result = await response.json() as KnowledgeResult & { error?: string };
       if (!response.ok) throw new Error(result.error || "知识检索失败");
       setKnowledgeResult(result);
     } catch (error) { setAskError(error instanceof Error ? error.message : "知识检索失败"); }
-    finally { setAsking(false); }
+    finally { if (knowledgeProgressTimer.current) clearTimeout(knowledgeProgressTimer.current); setAsking(false); }
   }
 
   return (
@@ -176,7 +179,7 @@ export default function Home() {
           {sessionError && <div className="access-blocked"><Icon name="shield" size={30}/><h2>当前账号暂不能进入资料库</h2><p>{sessionError}</p><span>请由系统管理员在“权限中心”按登录邮箱配置员工级别、部门和数据权限。</span></div>}
           {!sessionError && view === "工作台" && <Dashboard greeting={greeting} userName={currentUser?.name || "员工"} query={query} setQuery={setQuery} ask={ask} docType={docType} setDocType={setDocType} go={setView} records={records} summary={summary} dataLoading={dataLoading}/>} 
           {!sessionError && view === "智能搜索" && <IntelligentSearch/>}
-          {!sessionError && view === "知识会话" && <Knowledge query={query} setQuery={setQuery} lastQuestion={lastQuestion} result={knowledgeResult} asking={asking} error={askError} ask={ask}/>} 
+          {!sessionError && view === "知识会话" && <Knowledge query={query} setQuery={setQuery} lastQuestion={lastQuestion} result={knowledgeResult} asking={asking} phase={knowledgePhase} error={askError} ask={ask}/>}
           {!sessionError && view === "政策中心" && <PolicyCenter/>}
           {!sessionError && view === "智能写作" && <WritingV2/>}
           {!sessionError && view === "知识资源" && <Library user={currentUser} records={records} loading={dataLoading} error={dataError} refresh={refreshRecords}/>} 
@@ -266,19 +269,35 @@ function IntelligentSearch() {
   </section>;
 }
 
-function Knowledge({ query, setQuery, lastQuestion, result, asking, error, ask }: {
-  query: string; setQuery: (v:string)=>void; lastQuestion: string; result: KnowledgeResult | null; asking: boolean; error: string; ask:(e:FormEvent)=>void;
+function Knowledge({ query, setQuery, lastQuestion, result, asking, phase, error, ask }: {
+  query: string; setQuery: (v:string)=>void; lastQuestion: string; result: KnowledgeResult | null; asking: boolean; phase: "retrieving" | "organizing"; error: string; ask:(e:FormEvent)=>void;
 }) {
+  const [preview, setPreview] = useState<{ key: string; content: string } | null>(null);
+  const [previewError, setPreviewError] = useState("");
+  const [previewing, setPreviewing] = useState("");
+  // 点击引用后重新请求服务端；服务端会再次校验当前资料状态和当前用户权限，不复用旧页面数据。
+  async function openCitation(citation: KnowledgeResult["citations"][number]) {
+    const key = `${citation.documentId}-${citation.chunkIndex}`;
+    if (preview?.key === key) { setPreview(null); return; }
+    setPreviewing(key); setPreviewError("");
+    try {
+      const response = await fetch(`/api/knowledge/citations/${citation.documentId}?chunkIndex=${citation.chunkIndex}`, { cache: "no-store" });
+      const data = await response.json() as { preview?: string; error?: string };
+      if (!response.ok || !data.preview) throw new Error(data.error || "引用预览暂不可用");
+      setPreview({ key, content: data.preview });
+    } catch (loadError) { setPreviewError(loadError instanceof Error ? loadError.message : "引用预览暂不可用"); }
+    finally { setPreviewing(""); }
+  }
   return <section className="page">
     <PageTitle kicker="知识中枢" title="知识会话" text="通过RAG只依据员工有权查看的正式资料回答，并显示来源、版本和原文片段。"/>
     <div className="retrieval-status"><span><i/>账号权限过滤已启用</span><span><i/>引用溯源已启用</span><span className="waiting"><i/>Qwen3.8-27B等待私有模型网关</span></div>
     <div className="chat-panel">
       {!lastQuestion && !asking ? <div className="empty"><i><Icon name="chat" size={30}/></i><h2>您想查询什么？</h2><p>请先上传并审核一份脱敏资料。系统会先核验账号权限，再检索正式知识。</p></div> :
       <div className="conversation"><div className="question">{lastQuestion}</div>
-        {asking && <div className="answer loading-answer"><i>AI</i><div><p>正在进行账号权限过滤和资料检索……</p></div></div>}
+        {asking && <div className="answer loading-answer"><i>AI</i><div><p>{phase === "retrieving" ? "正在检索正式资料…" : "正在整理回答…"}</p></div></div>}
         {error && <div className="answer"><i>!</i><div><p>{error}</p></div></div>}
-          {result && <div className="answer"><i>AI</i><div><div className={`answer-mode ${result.mode}`}>{result.mode === "model" ? "依据问答" : result.mode === "extractive" ? "原文摘录" : "暂无可靠依据"}</div>{result.answer.split("\n").filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
-          {result.citations.length > 0 && <section><strong>引用依据（均已通过当前账号权限校验）</strong>{result.citations.map((citation, index) => <article className="citation" key={`${citation.documentId}-${index}`}><button>[{index + 1}]《{citation.title}》V{citation.version}.0 · {citation.sourceType} · {citation.location}</button><p>{citation.excerpt}</p></article>)}</section>}</div></div>}
+          {result && <div className="answer"><i>AI</i><div><div className={`answer-mode ${result.mode}`}>{result.mode === "model" ? "依据问答" : result.mode === "extractive" ? "原文摘录" : result.mode === "failed" ? "回答暂不可用" : "暂无可靠依据"}</div>{result.answer.split("\n").filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+          {result.citations.length > 0 && <section><strong>参考依据</strong>{result.citations.map((citation, index) => { const key = `${citation.documentId}-${citation.chunkIndex}`; return <article className="citation" key={`${citation.documentId}-${index}`}><button onClick={() => void openCitation(citation)} disabled={previewing === key}>[{index + 1}]《{citation.title}》 · {citation.category} · {citation.sourceOrganization || "来源单位待补充"} · {citation.documentDate || "日期待补充"} · {citation.location}</button>{previewing === key && <p>正在读取片段…</p>}{preview?.key === key && <p>{preview.content}</p>}</article>; })}{previewError && <p>{previewError}</p>}</section>}</div></div>}
       </div>}
       <form className="chat-input" onSubmit={ask}><input value={query} onChange={e => setQuery(e.target.value)} placeholder="输入问题，按回车发送"/><button aria-label="发送"><Icon name="send"/></button></form>
     </div>
