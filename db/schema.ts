@@ -90,3 +90,36 @@ export const auditLogs = sqliteTable("audit_logs", {
   id: text("id").primaryKey(), action: text("action").notNull(), entityType: text("entity_type").notNull(), entityId: text("entity_id").notNull(),
   operator: text("operator").notNull().default("项目管理员"), detail: text("detail").notNull(), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => [index("audit_logs_created_at_idx").on(table.createdAt)]);
+
+// 公文工作区仅保存待人工处理的写作材料，不会自动进入 documents 正式知识库。
+export const writingDocuments = sqliteTable("writing_documents", {
+  id: text("id").primaryKey(), documentType: text("document_type").notNull(), title: text("title").notNull(),
+  submittingDepartment: text("submitting_department").notNull(), recipient: text("recipient").notNull(), facts: text("facts").notNull(),
+  referenceQuery: text("reference_query").notNull(), referencesJson: text("references_json").notNull().default("[]"),
+  status: text("status").notNull().default("outline"), createdByUserId: text("created_by_user_id").notNull(), createdBy: text("created_by").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`), updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [index("writing_documents_creator_idx").on(table.createdByUserId), index("writing_documents_updated_idx").on(table.updatedAt)]);
+
+// 公文版本记录提纲、草稿、人工修改稿和最终定稿，读写目的仅为人工写作过程追溯。
+export const writingVersions = sqliteTable("writing_versions", {
+  id: text("id").primaryKey(), writingDocumentId: text("writing_document_id").notNull(), versionNo: integer("version_no").notNull(),
+  stage: text("stage").notNull(), content: text("content").notNull(), checksJson: text("checks_json").notNull().default("[]"),
+  // 结构化正文保存标题、段落、列表和真实表格数据；保留 content 以兼容已有纯文本版本。
+  structuredContentJson: text("structured_content_json").notNull().default("{}"),
+  createdByUserId: text("created_by_user_id").notNull(), createdBy: text("created_by").notNull(), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [uniqueIndex("writing_versions_unique").on(table.writingDocumentId, table.versionNo), index("writing_versions_document_idx").on(table.writingDocumentId)]);
+
+// 公文私有参考材料只服务于当前工作区，不进入 documents 正式知识库，也不参与公共检索。
+export const writingPrivateReferences = sqliteTable("writing_private_references", {
+  id: text("id").primaryKey(), writingDocumentId: text("writing_document_id").notNull(), fileName: text("file_name").notNull(),
+  mimeType: text("mime_type").notNull().default("application/octet-stream"), fileSize: integer("file_size").notNull().default(0),
+  // 私有原文件只允许使用 writing-references/ 前缀存入专用 R2，不复用公共 documents 的 storage_key。
+  storageKey: text("storage_key").notNull(),
+  parseFormat: text("parse_format").notNull(), parseStatus: text("parse_status").notNull(), parsedText: text("parsed_text").notNull().default(""),
+  locationsJson: text("locations_json").notNull().default("[]"), parseReason: text("parse_reason"),
+  createdByUserId: text("created_by_user_id").notNull(), createdBy: text("created_by").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`), updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("writing_private_references_document_idx").on(table.writingDocumentId),
+  index("writing_private_references_creator_idx").on(table.createdByUserId),
+]);

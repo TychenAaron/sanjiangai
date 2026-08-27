@@ -11,3 +11,8 @@ binding = "DB"
 database_name = "site-creator-d1"
 database_id = "00000000-0000-4000-8000-000000000000"
 migrations_dir = "drizzle"
+
+# 公文私有参考材料仅在 Miniflare local R2 中保存原文件，不能连接或复用线上、公共资料库的对象存储。
+[[r2_buckets]]
+binding = "WRITING_REFERENCES_BUCKET"
+bucket_name = "sanjiang-writing-references-local"

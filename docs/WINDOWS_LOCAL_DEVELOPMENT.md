@@ -147,3 +147,33 @@
 - `npm run verify:local:model-gateway`
 
 该命令覆盖未配置、合格引用、越界引用、无引用结论、超时、网关 500、无可靠依据和普通员工机密资料隔离。所有 mock 内容均为虚构文本，任何 Key 不得写入项目文件。
+
+## 本机公文写作 V1 验证
+
+公文工作区只支持请示、通知和工作情况汇报。它保存提纲、草稿、人工修改稿和最终定稿，但最终定稿不会自动进入正式知识库、不会自动审批、不会自动发文，也不会接入 OA 或 NC。
+
+先执行 `npm run db:migrate:local`，再启动 localhost 后运行 `npm run verify:local:writing`。验证仅使用虚构事实，检查普通员工只能查看自己的草稿、系统管理员可管理全部草稿、三类文种在无模型时生成待确认提纲、无权机密资料不会成为引用、最终定稿不自动进入公共知识库。
+
+## 本机公文最终稿 Word 导出
+
+只有公文工作区已经标记为 `final` 的服务器最终版本可以导出 Word。创建人只能导出自己的公文，`system_admin` 可以导出全部公文；导出操作只生成下载文件并记录最小审计信息，不代表审批、发文或进入 `documents` 公共知识库。
+
+在本机页面中，先保存并点击“标记最终定稿”，随后“导出 Word”按钮才会可用。下载文件包含标题、文种、最终正文、可选的引用依据核验附录，以及“须按集团现行审批制度审核后使用”的提示；不会包含本机测试身份、模型配置、草稿历史或无权资料。
+
+启动 localhost 后可运行 `npm run verify:local:writing-export`。脚本只创建虚构公文，验证 DOCX MIME 类型、`word/document.xml`、虚构标题和正文、创建人权限、普通员工跨账号拒绝、未定稿拒绝以及最终稿不自动进入知识库。严禁用真实集团资料进行本机导出测试。
+
+## 本机公文私有参考材料验收
+
+公文工作区的私有参考材料只服务于当前一份公文，创建人和 `system_admin` 可以访问；其他账号不能读取、上传或删除。材料不会写入 `documents`、知识资源、知识问答、正式 citations 或 Word 导出附录。
+
+支持的上传格式是 `txt`、`md`、`csv`、`tsv`、`docx`、`xlsx`、`pptx`，会在上传后显示解析状态和定位摘要。旧格式 `doc`、`ppt` 会保存原文件并显示 `pending_conversion`，当前不会伪造正文；每份公文最多 3 个文件、每个文件最大 5MB。`confidential`（机密）会被明确拒绝。
+
+上传顺序固定为：先解析，再检查后台 `blocked_terms`，命中时不写 local D1 或 local R2；通过后把原文件写入 local R2 的 `writing-references/` 私有前缀，再写入 `writing_private_references`。若 D1 写入失败，系统只回滚这一次创建的 R2 对象；删除时同步删除 D1 记录和对应私有 R2 原文件。
+
+本机验证步骤：
+
+- 执行 `npm run db:migrate:local`，它只使用 `wrangler.local.toml` 和 `--local`。
+- 执行 `npm run db:seed:local:test-users`，再启动 `npm run dev`。
+- 在另一个终端执行 `npm run verify:local:writing`。
+
+该脚本只使用虚构内容，覆盖 0 份材料继续、文本+xlsx+pptx 三份混合、禁止词无保存、第 4 个拒绝、doc/ppt 待转换、confidential 拒绝、越权拒绝、D1/R2 同步删除以及资料库和知识问答零泄露。

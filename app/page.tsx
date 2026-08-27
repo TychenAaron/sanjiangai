@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type View = "工作台" | "智能搜索" | "知识会话" | "智能写作" | "政策中心" | "知识资源" | "建设总览" | "权限中心" | "治理后台";
 type IconName = "home" | "chat" | "pen" | "policy" | "folder" | "admin" | "search" | "send" | "shield" | "arrow" | "refresh";
@@ -22,6 +22,31 @@ type KnowledgeResult = {
   model: string;
   citations: Array<{ documentId: string; title: string; version: number; excerpt: string; sourceType: string; chunkIndex: number; location: string; score: number }>;
 };
+type WritingPrivateReference = {
+  id: string;
+  fileName: string;
+  parseStatus: "parsed" | "pending_conversion" | "pending_ocr" | "failed";
+  parseFormat: string;
+  parseReason?: string | null;
+  excerpt: string;
+  locations: string[];
+};
+type WritingBlock =
+  | { id: string; type: "heading"; level: 1 | 2 | 3; text: string }
+  | { id: string; type: "paragraph" | "notice"; text: string }
+  | { id: string; type: "numbered_list"; items: string[] }
+  | { id: string; type: "table"; columns: string[]; rows: string[][] };
+type StructuredWriting = { title: string; documentType: "请示" | "通知" | "工作情况汇报"; recipient: string; submittingDepartment: string; dateLabel: string; blocks: WritingBlock[] };
+
+// 根据文件扩展名返回紧凑附件卡片的 CSS 图形标识，不影响上传、解析或权限判断。
+function privateReferenceKind(fileName: string) {
+  const extension = fileName.split(".").pop()?.toLowerCase() || "";
+  if (["doc", "docx"].includes(extension)) return { label: "W", tone: "word" };
+  if (["xls", "xlsx", "csv", "tsv"].includes(extension)) return { label: "X", tone: "excel" };
+  if (["ppt", "pptx"].includes(extension)) return { label: "P", tone: "ppt" };
+  if (["txt", "md"].includes(extension)) return { label: "T", tone: "text" };
+  return { label: "F", tone: "file" };
+}
 type SearchResult = {
   documentId: string; title: string; documentType: string; sourceType: string; ownerDepartment: string;
   securityLevel: string; version: number; excerpt: string; score: number;
@@ -152,7 +177,7 @@ export default function Home() {
           {!sessionError && view === "智能搜索" && <IntelligentSearch/>}
           {!sessionError && view === "知识会话" && <Knowledge query={query} setQuery={setQuery} lastQuestion={lastQuestion} result={knowledgeResult} asking={asking} error={askError} ask={ask}/>} 
           {!sessionError && view === "政策中心" && <PolicyCenter/>}
-          {!sessionError && view === "智能写作" && <Writing docType={docType} setDocType={setDocType}/>} 
+          {!sessionError && view === "智能写作" && <WritingV2/>}
           {!sessionError && view === "知识资源" && <Library user={currentUser} records={records} loading={dataLoading} error={dataError} refresh={refreshRecords}/>} 
           {!sessionError && view === "建设总览" && canOpenAdmin && <ProjectOverview/>}
           {!sessionError && view === "权限中心" && <AccessCenter user={currentUser} refreshSessionAndRecords={refreshSessionAndRecords}/>}
@@ -271,33 +296,270 @@ function PolicyCenter() {
   </section>;
 }
 
-function Writing({ docType, setDocType }: { docType:string; setDocType:(v:string)=>void }) {
-  const [mode, setMode] = useState("自由创作");
-  const modes = [
-    ["自由创作","上传参考资料或选择知识库，多轮修改并导出"],
-    ["大纲写作","检索相关材料，先生成多个大纲供人工确认"],
-    ["模板写作","按集团模板、栏目和字段生成规范初稿"],
-    ["稿件勘误","检查错别字、语法、标点、语序和搭配"],
-    ["AI工具","扩写、缩写、续写、润色、改写和总结"],
-  ];
-  return <section className="page">
-    <PageTitle kicker="智能办公" title="智能写作" text="统一管理自由创作、大纲写作、模板写作、稿件勘误和常用AI工具；所有正式公文仍须人工审核。"/>
-    <div className="writing-workspace">
-      <aside className="panel writing-modes"><h3>写作方式</h3>{modes.map(item => <button className={mode === item[0] ? "active" : ""} onClick={() => setMode(item[0])} key={item[0]}><i>{item[0][0]}</i><span><strong>{item[0]}</strong><small>{item[1]}</small></span></button>)}</aside>
-      <div className="panel writing-form"><div className="writing-mode-head"><div><span>当前方式</span><h2>{mode}</h2></div><b>一期功能</b></div>
-        {mode === "自由创作" && <><div className="steps"><b>1</b><span>选择文种</span><i/><b>2</b><span>填写事实</span><i/><b>3</b><span>选择知识</span><i/><b>4</b><span>生成与修改</span></div><h3>选择公文类型</h3><div className="large-types">{["请示","通知","工作情况汇报"].map(t => <button className={docType===t?"active":""} onClick={()=>setDocType(t)} key={t}><i>{t[0]}</i><strong>{t}</strong><small>{t==="请示"?"事项报批、资金申请和项目立项":t==="通知"?"部署工作、告知事项和会议安排":"阶段进展、专项工作和领导汇报"}</small></button>)}</div><div className="writing-fields"><label><span>写作主题</span><input placeholder={`输入${docType}主题`}/></label><label><span>事实与数据</span><textarea placeholder="只填写已经确认的事实、日期、金额和对象；不确定内容标记为待确认。"/></label><label><span>参考知识</span><select><option>当前账号可见的正式知识库</option><option>仅集团制度</option><option>仅本人上传资料</option></select></label></div><button className="primary">生成提纲 <Icon name="arrow" size={16}/></button></>}
-        {mode === "大纲写作" && <WritingPlaceholder title="先检索、再筛选、后生成" text="填写主题和写作要求后，系统从授权知识中推荐参考材料；人工勾选后生成多个大纲，再进入正文创作。" fields={["写作主题","重点事项","汇报对象"]}/>} 
-        {mode === "模板写作" && <WritingPlaceholder title="按集团模板生成" text="从公文模板库和大纲模板库选择现行模板，填写结构化字段后生成规范初稿。" fields={["模板类型","发文部门","主送对象"]}/>} 
-        {mode === "稿件勘误" && <WritingPlaceholder title="稿件检查与一键修正" text="检查拼写、语法、标点、语序、搭配、数字与引用依据；每条建议可接受或忽略。" fields={["上传待检稿件","检查范围"]}/>} 
-        {mode === "AI工具" && <div className="ai-tool-grid">{["扩写","缩写","续写","润色","改写","总结"].map(tool => <button key={tool}><i>{tool[0]}</i><strong>{tool}</strong><small>选中文本后使用</small></button>)}</div>}
-        <div className="model-pending"><Icon name="shield" size={16}/><span>写作界面已纳入一期。接入私有 Qwen3.8-27B 模型网关、模板库和Word/WPS组件后启用真实生成与导出。</span></div>
-      </div>
-    </div>
-  </section>;
-}
+const CURRENT_WRITING_WORKSPACE_KEY = "sanjiang-current-writing-workspace";
 
-function WritingPlaceholder({ title, text, fields }: { title: string; text: string; fields: string[] }) {
-  return <div className="writing-placeholder"><h3>{title}</h3><p>{text}</p><div>{fields.map((field,index) => <label key={field}><span>{field}</span>{index === 1 ? <textarea placeholder={`填写${field}`}/> : <input placeholder={`填写或选择${field}`}/>}</label>)}</div><button className="primary">进入下一步 <Icon name="arrow" size={16}/></button></div>;
+function WritingV2() {
+  const [form, setForm] = useState({ documentType: "请示", title: "", recipient: "", facts: "", referenceQuery: "" });
+  const [writing, setWriting] = useState<{ id: string; outline: string; references: KnowledgeResult["citations"]; privateReferences: WritingPrivateReference[]; checks: string[] } | null>(null);
+  const [structuredContent, setStructuredContent] = useState<StructuredWriting | null>(null);
+  const [notice, setNotice] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [showOutlineSettings, setShowOutlineSettings] = useState(true);
+  const [privateReferenceFiles, setPrivateReferenceFiles] = useState<Array<{ file: File; status: "uploading" | "error"; error?: string }>>([]);
+  const [privateUploading, setPrivateUploading] = useState(false);
+  const privateReferenceInput = useRef<HTMLInputElement>(null);
+  const structuredEditorRef = useRef<HTMLDivElement>(null);
+
+  // 说明：创建提纲时只使用已确认事实、正式知识库授权引用和当前工作区私有参考材料摘要，不自动发文。
+  async function createOutline() {
+    const response = await fetch("/api/writing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: writing ? "update_outline" : "create", ...(writing ? { id: writing.id } : {}), ...form }),
+    });
+    const data = await response.json() as {
+      id?: string;
+      outline?: string;
+      references?: KnowledgeResult["citations"];
+      privateReferences?: WritingPrivateReference[];
+      checks?: string[];
+      generated?: StructuredWriting;
+      error?: string;
+    };
+    if (!response.ok || !data.id || !data.outline || !data.generated) {
+      setNotice(data.error || "创建提纲失败");
+      return;
+    }
+    setWriting({
+      id: data.id,
+      outline: data.outline,
+      references: data.references || [],
+      privateReferences: data.privateReferences || [],
+      checks: data.checks || [],
+    });
+    setStructuredContent(data.generated);
+    window.localStorage.setItem(CURRENT_WRITING_WORKSPACE_KEY, data.id);
+    setShowOutlineSettings(false);
+    setNotice(writing ? "正文已按同一工作区重新生成。" : "正文已生成，可继续人工编辑并多次导出 Word。 ");
+  }
+
+  // 说明：文件选择确认后立刻创建或复用当前用户工作区并上传；工作区仍停留在提纲设置阶段，只有主按钮才会进入正文编辑阶段。
+  async function ensureWritingWorkspace() {
+    if (writing) return writing;
+    if (!form.title.trim()) throw new Error("请先填写公文标题后再导入参考文件");
+    const response = await fetch("/api/writing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "create_workspace", ...form }),
+    });
+    const data = await response.json() as { id?: string; error?: string };
+    if (!response.ok || !data.id) throw new Error(data.error || "创建参考文件工作区失败");
+    const workspace = { id: data.id, outline: "", references: [], privateReferences: [], checks: [] };
+    setWriting(workspace);
+    window.localStorage.setItem(CURRENT_WRITING_WORKSPACE_KEY, data.id);
+    return workspace;
+  }
+
+  // 说明：选择器取消时不执行任何操作；选择成功后立即调用原有私有材料接口，服务端继续负责格式、数量、权限和安全检查。
+  async function selectPrivateReferenceFiles(files: FileList | null) {
+    if (!files?.length || privateUploading) return;
+    if (!form.title.trim()) {
+      setNotice("请先填写公文标题后再导入参考文件");
+      if (privateReferenceInput.current) privateReferenceInput.current.value = "";
+      return;
+    }
+    const selected = Array.from(files);
+    const used = (writing?.privateReferences.length || 0) + privateReferenceFiles.length;
+    const existingNames = new Set([
+      ...(writing?.privateReferences.map((item) => item.fileName) || []),
+      ...privateReferenceFiles.map((item) => item.file.name),
+    ]);
+    const accepted = selected.filter((file) => {
+      if (existingNames.has(file.name)) return false;
+      existingNames.add(file.name);
+      return true;
+    }).slice(0, Math.max(0, 3 - used));
+    if (!accepted.length) {
+      setNotice(used >= 3 ? "每份公文最多上传 3 个参考文件" : "同一个参考文件不能重复上传");
+      if (privateReferenceInput.current) privateReferenceInput.current.value = "";
+      return;
+    }
+    const pending = accepted.map((file) => ({ file, status: "uploading" as const }));
+    setPrivateReferenceFiles((previous) => [...previous, ...pending]);
+    setPrivateUploading(true);
+    setNotice("");
+    try {
+      const workspace = await ensureWritingWorkspace();
+      for (const item of pending) {
+        const formData = new FormData();
+        formData.set("file", item.file);
+        const response = await fetch(`/api/writing/${workspace.id}/private-references`, { method: "POST", body: formData });
+        const data = await response.json() as { privateReference?: WritingPrivateReference; error?: string };
+        if (!response.ok || !data.privateReference) {
+          setPrivateReferenceFiles((previous) => previous.map((current) => current.file === item.file ? { ...current, status: "error", error: data.error || "上传失败" } : current));
+          continue;
+        }
+        setWriting((previous) => previous ? { ...previous, privateReferences: [data.privateReference!, ...previous.privateReferences] } : previous);
+        setPrivateReferenceFiles((previous) => previous.filter((current) => current.file !== item.file));
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "上传私有参考材料失败";
+      setPrivateReferenceFiles((previous) => previous.map((item) => pending.some((current) => current.file === item.file) ? { ...item, status: "error", error: message } : item));
+      setNotice(message);
+    } finally {
+      setPrivateUploading(false);
+      if (privateReferenceInput.current) privateReferenceInput.current.value = "";
+    }
+  }
+
+  // 删除只提交当前工作区和材料 ID；服务端会再次校验创建人权限，并同步清理 D1 记录与私有 R2 原文件。
+  async function deletePrivateReference(referenceId: string) {
+    if (!writing || privateUploading) return;
+    setPrivateUploading(true);
+    setNotice("");
+    try {
+      const response = await fetch(`/api/writing/${writing.id}/private-references?referenceId=${encodeURIComponent(referenceId)}`, { method: "DELETE" });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "删除私有参考材料失败");
+      setWriting((previous) => previous ? { ...previous, privateReferences: previous.privateReferences.filter((item) => item.id !== referenceId) } : previous);
+      setNotice("私有参考材料及其私有原文件已同步删除；请重新保存提纲以刷新摘要。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "删除私有参考材料失败");
+    } finally {
+      setPrivateUploading(false);
+    }
+  }
+
+  // 说明：连续正文编辑器在用户输入时把可见标题、段落、列表和表格单元格回写到内部结构；用户无需维护区块或排版数据。
+  function syncStructuredDocument(editor: HTMLDivElement, source: StructuredWriting) {
+    const textByBlock = new Map<string, string>();
+    const listByBlock = new Map<string, string[]>();
+    const tableByBlock = new Map<string, { columns: string[]; rows: string[][] }>();
+    editor.querySelectorAll<HTMLElement>("[data-writing-block]").forEach((element) => { textByBlock.set(element.dataset.writingBlock || "", element.innerText.trim()); });
+    editor.querySelectorAll<HTMLElement>("[data-writing-list-item]").forEach((element) => {
+      const [id, indexText] = (element.dataset.writingListItem || "").split(":"); const index = Number(indexText);
+      if (!id || !Number.isInteger(index)) return;
+      const values = listByBlock.get(id) || []; values[index] = element.innerText.trim(); listByBlock.set(id, values);
+    });
+    editor.querySelectorAll<HTMLElement>("[data-writing-table-cell]").forEach((element) => {
+      const [id, rowText, columnText] = (element.dataset.writingTableCell || "").split(":"); const row = Number(rowText); const column = Number(columnText);
+      if (!id || !Number.isInteger(row) || !Number.isInteger(column)) return;
+      const table = tableByBlock.get(id) || { columns: [], rows: [] };
+      if (row === -1) table.columns[column] = element.innerText.trim();
+      else { const values = table.rows[row] || []; values[column] = element.innerText.trim(); table.rows[row] = values; }
+      tableByBlock.set(id, table);
+    });
+    const next = {
+      ...source,
+      blocks: source.blocks.map((block) => {
+        if (block.type === "heading" || block.type === "paragraph" || block.type === "notice") return { ...block, text: textByBlock.has(block.id) ? textByBlock.get(block.id) || "" : "" };
+        if (block.type === "numbered_list") return { ...block, items: listByBlock.has(block.id) ? listByBlock.get(block.id) || [] : [] };
+        const table = tableByBlock.get(block.id); return table ? { ...block, columns: table.columns.length ? table.columns : block.columns, rows: table.rows.length ? table.rows : block.rows } : block;
+      }),
+    };
+    setStructuredContent(next);
+    return next;
+  }
+
+  // 说明：导出前先将当前区块保存到同一工作区，服务端重新校验创建人/管理员权限，再按最新版本生成 Word。
+  async function exportWord() {
+    if (!writing || !structuredContent) return;
+    const currentStructured = structuredEditorRef.current ? syncStructuredDocument(structuredEditorRef.current, structuredContent) : structuredContent;
+    setExporting(true);
+    setNotice("");
+    try {
+      const saved = await fetch("/api/writing", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "save_structured", id: writing.id, structured: currentStructured }),
+      });
+      const savedData = await saved.json() as { error?: string; checks?: string[] };
+      if (!saved.ok) throw new Error(savedData.error || "保存当前正文失败");
+      const response = await fetch(`/api/writing/${writing.id}/export`, { cache: "no-store" });
+      if (!response.ok) {
+        const data = await response.json() as { error?: string };
+        throw new Error(data.error || "导出 Word 失败");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${form.documentType}-${form.title || "公文"}.docx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setNotice(`Word 已开始下载。${(savedData.checks || []).join(" ")} 导出不代表审批、发文或进入知识库。`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "导出 Word 失败");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  return <section className="page writing-editor-page">
+    <PageTitle kicker="智能办公" title="公文写作 V2" text="支持当前工作区私有参考材料；它们仅供本公文人工写作参考，不自动进入正式知识库。"/>
+    <section className="panel writing-editor">
+      <div className="writing-editor-meta">
+        <div className="large-types">{["请示", "通知", "工作情况汇报"].map((type) => <button className={form.documentType === type ? "active" : ""} onClick={() => { setForm({ ...form, documentType: type }); setStructuredContent((previous) => previous ? { ...previous, documentType: type as StructuredWriting["documentType"] } : previous); }} key={type}><strong>{type}</strong></button>)}</div>
+        <div className="writing-editor-headings">
+          <label><span>标题 *</span><input value={form.title} onChange={(e) => { setForm({ ...form, title: e.target.value }); setStructuredContent((previous) => previous ? { ...previous, title: e.target.value } : previous); }}/></label>
+          <label><span>报送/发送对象</span><input value={form.recipient} onChange={(e) => { setForm({ ...form, recipient: e.target.value }); setStructuredContent((previous) => previous ? { ...previous, recipient: e.target.value } : previous); }}/></label>
+        </div>
+      </div>
+      {writing && <button className="writing-settings-toggle" type="button" onClick={() => setShowOutlineSettings(!showOutlineSettings)}>{showOutlineSettings ? "收起提纲与依据设置" : "重新显示提纲与依据设置"}</button>}
+      {(!writing || showOutlineSettings) && <section className="writing-settings">
+        <div className="writing-fields">
+          <label><span>已确认事实 *</span><textarea value={form.facts} placeholder="只填写已经确认的日期、金额、人员和事项；不确定内容写待确认。" onChange={(e) => setForm({ ...form, facts: e.target.value })}/></label>
+          <label><span>依据检索词</span><input value={form.referenceQuery} onChange={(e) => setForm({ ...form, referenceQuery: e.target.value })}/></label>
+        </div>
+        <div className="writing-private-reference-box">
+          <input ref={privateReferenceInput} className="private-reference-input" type="file" multiple accept=".txt,.md,.csv,.tsv,.doc,.docx,.xls,.xlsx,.ppt,.pptx" onChange={(e) => selectPrivateReferenceFiles(e.target.files)}/>
+          <div className="private-reference-toolbar">
+            <button type="button" className="private-reference-picker" onClick={() => privateReferenceInput.current?.click()} disabled={privateUploading || (writing?.privateReferences.length || 0) + privateReferenceFiles.length >= 3}>参考文件</button>
+            <span>{(writing?.privateReferences.length || 0) + privateReferenceFiles.length}/3</span>
+          </div>
+          <div className="private-reference-list" aria-label="待上传参考文件">
+            {writing?.privateReferences.map((item) => {
+              const kind = privateReferenceKind(item.fileName);
+              const legacyStatus = item.parseStatus === "pending_conversion" || item.parseStatus === "pending_ocr" ? "待转换/待 OCR" : "";
+              return <article className="private-reference-card" key={item.id} title={item.fileName}>
+                <i className={`private-reference-icon ${kind.tone}`}>{kind.label}</i>
+                <span><strong>{item.fileName}</strong>{legacyStatus && <small>{legacyStatus}</small>}</span>
+                <button type="button" aria-label={`移除 ${item.fileName}`} title={`移除 ${item.fileName}`} disabled={privateUploading} onClick={() => void deletePrivateReference(item.id)}>×</button>
+              </article>;
+            })}
+            {privateReferenceFiles.map((item) => {
+              const kind = privateReferenceKind(item.file.name);
+              return <article className="private-reference-card" key={`${item.file.name}-${item.file.lastModified}-${item.file.size}`} title={item.file.name}>
+                <i className={`private-reference-icon ${kind.tone}`}>{kind.label}</i>
+                <span><strong>{item.file.name}</strong><small className={item.status === "error" ? "private-reference-error" : ""}>{item.status === "error" ? item.error : "上传中"}</small></span>
+                <button type="button" aria-label={`移除 ${item.file.name}`} title={`移除 ${item.file.name}`} onClick={() => setPrivateReferenceFiles((previous) => previous.filter((current) => current.file !== item.file))}>×</button>
+              </article>;
+            })}
+            {!writing?.privateReferences.length && !privateReferenceFiles.length && <small className="private-reference-hint">支持 Word、Excel、PPT、文本，最多 3 份</small>}
+          </div>
+        </div>
+        <button className="primary" onClick={() => void createOutline()}>开始正文编写并检索依据</button>
+      </section>}
+      {notice && <p className="writing-notice">{notice}</p>}
+      {writing && !showOutlineSettings && <>
+        {structuredContent && <section className="writing-body structured-writing-body">
+          <div className="writing-body-head"><div><h3>完整正文</h3><span>可直接修改文字、段落和表格内容；导出时保存当前文稿。</span></div></div>
+          <div ref={structuredEditorRef} className="writing-document" contentEditable suppressContentEditableWarning onInput={(event) => syncStructuredDocument(event.currentTarget, structuredContent)}>
+            <header className="writing-document-heading" contentEditable={false}><h1>{structuredContent.title}</h1><p>{structuredContent.documentType}　{structuredContent.recipient || "【待人工核验】"}</p></header>
+            {structuredContent.blocks.map((block) => <div className={`writing-document-block ${block.type}`} key={block.id}>
+              {block.type === "heading" && <div className={`writing-document-title level-${block.level}`} data-writing-block={block.id}>{block.text}</div>}
+              {block.type === "paragraph" && <p data-writing-block={block.id}>{block.text}</p>}
+              {block.type === "notice" && <p className="writing-document-notice" data-writing-block={block.id}>{block.text}</p>}
+              {block.type === "numbered_list" && <ol>{block.items.map((item, index) => <li data-writing-list-item={`${block.id}:${index}`} key={`${block.id}-${index}`}>{item}</li>)}</ol>}
+              {block.type === "table" && <table><thead><tr>{block.columns.map((column, index) => <th data-writing-table-cell={`${block.id}:-1:${index}`} key={`${block.id}-head-${index}`}>{column}</th>)}</tr></thead><tbody>{block.rows.map((row, rowIndex) => <tr key={`${block.id}-row-${rowIndex}`}>{row.map((cell, columnIndex) => <td data-writing-table-cell={`${block.id}:${rowIndex}:${columnIndex}`} key={`${block.id}-${rowIndex}-${columnIndex}`}>{cell}</td>)}</tr>)}</tbody></table>}
+            </div>)}
+          </div>
+        </section>}
+        <div className="form-actions writing-editor-actions"><button className="submit" disabled={!structuredContent || exporting} onClick={() => void exportWord()}>{exporting ? "正在导出…" : "导出 Word"}</button></div>
+      </>}
+    </section>
+  </section>;
 }
 
 function ProjectOverview() {

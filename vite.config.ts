@@ -29,6 +29,11 @@ const localBindingConfig = {
           binding: r2,
           bucket_name: "site-creator-r2",
         },
+        // 公文私有材料使用独立 local R2 绑定，避免与公共 documents 原文件混用。
+        {
+          binding: "WRITING_REFERENCES_BUCKET",
+          bucket_name: "sanjiang-writing-references-local",
+        },
       ]
     : [],
 };
