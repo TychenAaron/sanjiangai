@@ -29,6 +29,7 @@
     "verify:hybrid-knowledge-retrieval": "node --experimental-strip-types scripts/verify-hybrid-knowledge-retrieval.ts",
     "verify:reranked-knowledge-evidence": "node --experimental-strip-types scripts/verify-reranked-knowledge-evidence.ts",
     "verify:full-rag-grounded-answer": "node --experimental-strip-types scripts/verify-full-rag-grounded-answer.ts",
+    "eval:rag": "node --experimental-strip-types scripts/evaluate-rag.ts",
     "verify:local:writing": "node --experimental-strip-types scripts/verify-local-writing.ts",
     "verify:local:writing-export": "node --experimental-strip-types scripts/verify-local-writing-export.ts",
     "verify:writing-structured": "node --experimental-strip-types scripts/verify-writing-structured.ts",
