@@ -4,6 +4,7 @@ import { approvals, auditLogs, documentAcl, documents, documentVersions } from "
 import { accessError, canReadDocument, requireAccessUser } from "../../../../../lib/access";
 import { indexDocumentVersion } from "../../../../../lib/ingestion";
 import { findBlockedMatches } from "../../../../../lib/upload-control";
+import { DevD1VectorStore } from "../../../../../lib/vector-store";
 
 export const runtime = "edge";
 
@@ -47,7 +48,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const operator = user.name;
     await db.insert(documentVersions).values({ id: versionId, documentId: id, versionNo: nextVersion, content, changeSummary: body.changeSummary?.trim() || "人工修改", versionStatus: "pending", createdBy: operator, createdAt: now });
     await indexDocumentVersion(id, versionId, content);
-    await db.update(documents).set({ currentVersion: nextVersion, knowledgeStatus: "pending", resourceStatus: "pending_review", updatedAt: now }).where(eq(documents.id, id));
+    // 新版本一创建即清除旧向量；直到新版本重新批准并成功生成 Embedding 前，不存在可检索旧版本向量。
+    await new DevD1VectorStore().deleteDocumentVectors(id);
+    await db.update(documents).set({ currentVersion: nextVersion, knowledgeStatus: "pending", resourceStatus: "pending_review", vectorStatus: "pending", updatedAt: now }).where(eq(documents.id, id));
     await db.insert(approvals).values({ id: crypto.randomUUID(), documentId: id, versionId, status: "pending", submittedBy: operator, submittedAt: now });
     await db.insert(auditLogs).values({ id: crypto.randomUUID(), action: "提交新版本", entityType: "document", entityId: id, operator, detail: `${document.title}｜V${nextVersion}.0｜${body.changeSummary?.trim() || "人工修改"}`, createdAt: now });
     return Response.json({ ok: true, version: nextVersion }, { status: 201 });

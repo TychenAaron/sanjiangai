@@ -22,6 +22,8 @@ export const documents = sqliteTable("documents", {
   trialDataClass: text("trial_data_class").notNull().default("T2-内部脱敏测试"), isTrialData: integer("is_trial_data", { mode: "boolean" }).notNull().default(true),
   fileName: text("file_name"), storageKey: text("storage_key"), mimeType: text("mime_type"), fileSize: integer("file_size"),
   parseStatus: text("parse_status").notNull().default("parsed"), indexStatus: text("index_status").notNull().default("ready"),
+  // 向量索引状态独立于既有关键词分段索引；未配置 Embedding 服务时保持 pending，绝不伪造向量结果。
+  vectorStatus: text("vector_status").notNull().default("pending"),
   // 正式资料的生命周期与审核元数据；只有 approved、effective 且可靠性达标的资料可进入检索和写作引用。
   resourceStatus: text("resource_status").notNull().default("draft"), resourceCategory: text("resource_category").notNull().default("其他"),
   sourceOrganization: text("source_organization"), documentDate: text("document_date"), applicableScope: text("applicable_scope"), reliabilityScore: integer("reliability_score").notNull().default(0), reviewNote: text("review_note"),
@@ -45,6 +47,18 @@ export const documentChunks = sqliteTable("document_chunks", {
   uniqueIndex("document_chunk_unique").on(table.versionId, table.chunkIndex),
   index("document_chunks_document_idx").on(table.documentId),
   index("document_chunks_version_idx").on(table.versionId),
+]);
+
+// 正式资料分段的开发阶段向量索引。只保存 Embedding 数值和可追溯主键，不复制 R2 原件或额外正文。
+export const documentEmbeddings = sqliteTable("document_embeddings", {
+  id: text("id").primaryKey(), documentId: text("document_id").notNull(), versionId: text("version_id").notNull(),
+  chunkId: text("chunk_id").notNull(), model: text("model").notNull(), vectorJson: text("vector_json").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("document_embedding_version_chunk_unique").on(table.versionId, table.chunkId),
+  index("document_embeddings_document_idx").on(table.documentId),
+  index("document_embeddings_version_idx").on(table.versionId),
+  index("document_embeddings_chunk_idx").on(table.chunkId),
 ]);
 
 export const documentAcl = sqliteTable("document_acl", {

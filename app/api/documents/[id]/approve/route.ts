@@ -3,6 +3,7 @@ import { getDb } from "../../../../../db";
 import { approvals, auditLogs, documents, documentVersions } from "../../../../../db/schema";
 import { accessError, canReviewDocument, requireAccessUser } from "../../../../../lib/access";
 import { indexDocumentVersion } from "../../../../../lib/ingestion";
+import { indexApprovedDocumentVersion } from "../../../../../lib/vector-indexing";
 
 export const runtime = "edge";
 
@@ -33,10 +34,19 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (decision === "rejected" && !String(body.comment || "").trim()) return Response.json({ error: "拒绝资料时必须填写简短审核理由" }, { status: 400 });
     const reviewer = user.name;
     const chunkCount = await indexDocumentVersion(id, version.id, version.content);
-    await db.update(documents).set({ knowledgeStatus: decision, resourceStatus: decision, resourceCategory: category || doc.resourceCategory, sourceOrganization: sourceOrganization || doc.sourceOrganization, documentDate: documentDate || doc.documentDate, applicableScope: applicableScope || doc.applicableScope, reliabilityScore: Number.isFinite(reliabilityScore) ? reliabilityScore : doc.reliabilityScore, reviewNote: body.comment || null, updatedAt: now }).where(eq(documents.id, id));
+    await db.update(documents).set({ knowledgeStatus: decision, resourceStatus: decision, resourceCategory: category || doc.resourceCategory, sourceOrganization: sourceOrganization || doc.sourceOrganization, documentDate: documentDate || doc.documentDate, applicableScope: applicableScope || doc.applicableScope, reliabilityScore: Number.isFinite(reliabilityScore) ? reliabilityScore : doc.reliabilityScore, reviewNote: body.comment || null, vectorStatus: decision === "approved" ? "pending" : "disabled", updatedAt: now }).where(eq(documents.id, id));
     await db.update(documentVersions).set({ versionStatus: decision }).where(eq(documentVersions.id, version.id));
     await db.update(approvals).set({ status: decision, reviewer, comment: body.comment || (decision === "approved" ? "审核通过，可进入正式知识层" : "退回修改"), reviewedAt: now })
       .where(and(eq(approvals.documentId, id), eq(approvals.status, "pending")));
+    // 批准后才向外部 Embedding 服务发送已审核分段；失败只标记状态，不生成模拟向量或改变关键词检索。
+    const vectorResult = decision === "approved" ? await indexApprovedDocumentVersion(id, version.id) : { status: "pending" as const, count: 0 };
+    if (decision === "approved") {
+      await db.update(documents).set({ vectorStatus: vectorResult.status, updatedAt: new Date().toISOString() }).where(eq(documents.id, id));
+      await db.insert(auditLogs).values({
+        id: crypto.randomUUID(), action: "向量索引", entityType: "document", entityId: id, operator: reviewer,
+        detail: `status=${vectorResult.status}; count=${vectorResult.count}`, createdAt: new Date().toISOString(),
+      });
+    }
     await db.insert(auditLogs).values({
       id: crypto.randomUUID(), action: decision === "approved" ? "审核通过" : "审核退回", entityType: "document", entityId: id,
       operator: reviewer, detail: `${doc.title}｜V${version.versionNo}.0｜${chunkCount}个检索片段｜${body.comment || "无补充意见"}`, createdAt: now,

@@ -10,6 +10,8 @@ import {
   resolveGroundedAnswer,
   type ModelGatewayCitation,
 } from "./model-gateway";
+import { embedTexts, readEmbeddingGatewayConfig } from "./embedding-gateway";
+import { DevD1VectorStore, type VectorStore } from "./vector-store";
 
 // 完整标准化问题命中时会额外获得 12 分，因此默认可靠依据门槛也使用 12 分。
 // 这要求候选资料至少包含完整提问，或累积足够多个关键词命中，避免单个弱关键词触发回答。
@@ -29,6 +31,34 @@ export type KnowledgeCitation = {
   location: string;
   score: number;
 };
+
+type AuthorizedChunkRow = {
+  chunk: typeof documentChunks.$inferSelect;
+  document: typeof documents.$inferSelect;
+  versionId: string;
+  versionNo: number;
+  versionStatus: string;
+};
+
+export type VectorKnowledgeEvidence = KnowledgeCitation & { chunkId: string };
+
+// 判断资料是否满足正式 evidence 门槛。输入是已从 D1 读取的资料元数据，输出不涉及正文或模型调用。
+export function isFormalEvidenceDocument(document: typeof documents.$inferSelect, versionNo: number, versionStatus: string) {
+  return document.knowledgeStatus === "approved" &&
+    document.resourceStatus === "approved" &&
+    document.lifecycleStatus === "effective" &&
+    document.parseStatus === "parsed" &&
+    document.indexStatus === "ready" &&
+    document.securityLevel !== "D4" &&
+    document.reliabilityScore >= 60 &&
+    document.currentVersion === versionNo &&
+    versionStatus === "approved";
+}
+
+// 从候选资料中建立当前用户可访问的正式 chunk 范围。权限在任何关键词或向量评分之前执行。
+export function selectAuthorizedChunks(user: AccessUser, rows: AuthorizedChunkRow[], grants: typeof documentAcl.$inferSelect[]) {
+  return rows.filter((row) => isFormalEvidenceDocument(row.document, row.versionNo, row.versionStatus) && canReadDocument(user, row.document, grants));
+}
 
 function terms(input: string) {
   const normalized = input.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
@@ -63,7 +93,7 @@ function minimumReliableScore() {
   return DEFAULT_MIN_RELIABLE_SCORE;
 }
 
-export async function retrieveAuthorized(user: AccessUser, query: string) {
+export async function collectAuthorizedChunks(user: AccessUser) {
   const db = getDb();
   const [grants, rows] = await Promise.all([
     db.select().from(documentAcl),
@@ -72,6 +102,7 @@ export async function retrieveAuthorized(user: AccessUser, query: string) {
       document: documents,
       versionId: documentVersions.id,
       versionNo: documentVersions.versionNo,
+      versionStatus: documentVersions.versionStatus,
     }).from(documentChunks)
       .innerJoin(documents, eq(documentChunks.documentId, documents.id))
       .innerJoin(documentVersions, eq(documentChunks.versionId, documentVersions.id))
@@ -79,15 +110,54 @@ export async function retrieveAuthorized(user: AccessUser, query: string) {
       .where(and(eq(documents.knowledgeStatus, "approved"), eq(documents.resourceStatus, "approved"), eq(documents.lifecycleStatus, "effective"), eq(documents.parseStatus, "parsed"), eq(documents.indexStatus, "ready"), ne(documents.securityLevel, "D4"), gte(documents.reliabilityScore, 60), eq(documentVersions.versionStatus, "approved")))
       .limit(3000),
   ]);
+  return selectAuthorizedChunks(user, rows, grants);
+}
+
+export async function retrieveAuthorized(user: AccessUser, query: string) {
   const reliableScore = minimumReliableScore();
+  const rows = await collectAuthorizedChunks(user);
   return rows
-    // 说明：必须先按当前账号的角色、部门、数据级别和 ACL 过滤，任何无权分片都不能参与评分、引用或模型上下文。
-    .filter(row => row.versionNo === row.document.currentVersion && canReadDocument(user, row.document, grants))
+    // 说明：collectAuthorizedChunks 已在关键词评分之前完成当前账号的角色、部门、数据级别和 ACL 过滤。
     .map(row => ({ ...row, score: relevance(query, row.chunk.content) }))
     // 说明：权限通过后仍需达到可解释的可靠依据门槛，单个弱关键词命中不能触发问答。
     .filter(row => row.score >= reliableScore)
     .sort((a, b) => b.score - a.score)
     .slice(0, 5);
+}
+
+// 在已授权 chunk scope 内执行开发阶段 exact cosine retrieval。Embedding 未配置或失败时返回空 evidence，绝不伪造结果。
+export async function retrieveAuthorizedVector(
+  user: AccessUser,
+  query: string,
+  options: { topK?: number; store?: VectorStore } = {},
+): Promise<{ status: "success" | "no_scope" | "not_configured" | "timeout" | "gateway_error" | "invalid_response"; evidence: VectorKnowledgeEvidence[] }> {
+  const scopedRows = await collectAuthorizedChunks(user);
+  if (!scopedRows.length) return { status: "no_scope", evidence: [] };
+
+  const config = readEmbeddingGatewayConfig(env as unknown as Record<string, string | undefined>);
+  const embedding = await embedTexts(config, [query]);
+  if (embedding.status !== "success") return { status: embedding.status, evidence: [] };
+
+  // 调用向量存储前 scope 已同时完成 approved/effective/current/parsed/reliability/D4 与 ACL 过滤。
+  const hits = await (options.store || new DevD1VectorStore()).searchVectors({
+    queryVector: embedding.vectors[0],
+    allowedChunkIds: scopedRows.map((row) => row.chunk.id),
+    topK: options.topK || 5,
+  });
+  const rowsByChunkId = new Map(scopedRows.map((row) => [row.chunk.id, row]));
+  return {
+    status: "success",
+    evidence: hits.flatMap((hit) => {
+      const row = rowsByChunkId.get(hit.chunkId);
+      if (!row) return [];
+      return [{
+        documentId: row.document.id, versionId: row.versionId, chunkId: row.chunk.id, title: row.document.title,
+        category: row.document.resourceCategory, sourceOrganization: row.document.sourceOrganization, documentDate: row.document.documentDate,
+        version: row.versionNo, excerpt: row.chunk.content.slice(0, 520), sourceType: row.document.sourceType,
+        chunkIndex: row.chunk.chunkIndex, location: `第${row.chunk.chunkIndex + 1}段`, score: Number(hit.score.toFixed(6)),
+      }];
+    }),
+  };
 }
 
 

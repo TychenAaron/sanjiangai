@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "../../../../../db";
 import { approvals, auditLogs, documentAcl, documentChunks, documents, documentVersions } from "../../../../../db/schema";
 import { accessError, requireAccessUser } from "../../../../../lib/access";
+import { DevD1VectorStore } from "../../../../../lib/vector-store";
 
 export const runtime = "edge";
 type Bucket = { delete: (key: string) => Promise<unknown> };
@@ -20,6 +21,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (!new Set(["approved", "pending_review", "rejected"]).has(doc.resourceStatus)) return Response.json({ error: "当前资料状态不能归档" }, { status: 400 });
     const now = new Date().toISOString();
     await db.update(documents).set({ resourceStatus: "archived", knowledgeStatus: "archived", lifecycleStatus: "archived", updatedAt: now }).where(eq(documents.id, id));
+    // 先撤销正式状态，再清理同一资料所有向量，避免归档版本残留为检索 evidence。
+    await new DevD1VectorStore().deleteDocumentVectors(id);
     await db.insert(auditLogs).values({ id: crypto.randomUUID(), action: "归档正式资料", entityType: "document", entityId: id, operator: user.name, detail: "资料已归档并立即退出检索和正式引用范围", createdAt: now });
     return Response.json({ ok: true, status: "archived" });
   } catch (error) { return accessError(error, "归档资料失败"); }
@@ -47,6 +50,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
       } catch { storageCleanup = "failed_protected"; }
     }
     await db.delete(documentChunks).where(eq(documentChunks.documentId, id));
+    await new DevD1VectorStore().deleteDocumentVectors(id);
     await db.delete(approvals).where(eq(approvals.documentId, id));
     await db.delete(documentAcl).where(eq(documentAcl.documentId, id));
     await db.delete(documentVersions).where(eq(documentVersions.documentId, id));
