@@ -142,6 +142,22 @@ export const writingVersions = sqliteTable("writing_versions", {
   createdByUserId: text("created_by_user_id").notNull(), createdBy: text("created_by").notNull(), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => [uniqueIndex("writing_versions_unique").on(table.writingDocumentId, table.versionNo), index("writing_versions_document_idx").on(table.writingDocumentId)]);
 
+// AI 写作成果是工作区内的非正式数据快照。它不属于 documents，不能被公共检索或 RAG 读取，只有受控正式化后才会关联正式资料。
+export const writingArtifacts = sqliteTable("writing_artifacts", {
+  id: text("id").primaryKey(), writingDocumentId: text("writing_document_id").notNull(), writingVersionId: text("writing_version_id").notNull(),
+  ownerUserId: text("owner_user_id").notNull(), ownerDepartment: text("owner_department").notNull(), artifactType: text("artifact_type").notNull().default("writing_output"),
+  content: text("content").notNull(), structuredContentJson: text("structured_content_json").notNull().default(""), privateReferenceIdsJson: text("private_reference_ids_json").notNull().default("[]"),
+  formalEvidenceIdsJson: text("formal_evidence_ids_json").notNull().default("[]"), modelAuditRef: text("model_audit_ref"), status: text("status").notNull().default("NON_FORMAL"),
+  formalizedAt: text("formalized_at"), formalizedBy: text("formalized_by"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`), updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [uniqueIndex("writing_artifacts_version_unique").on(table.writingVersionId), index("writing_artifacts_owner_idx").on(table.ownerUserId), index("writing_artifacts_writing_idx").on(table.writingDocumentId), index("writing_artifacts_status_idx").on(table.status)]);
+
+// 正式成果只记录与既有正式 documents/document_versions 的关系，不复制第二套审核、分段或索引生命周期。
+export const formalArtifacts = sqliteTable("formal_artifacts", {
+  id: text("id").primaryKey(), sourceWritingArtifactId: text("source_writing_artifact_id").notNull(), ownerUserId: text("owner_user_id").notNull(), ownerDepartment: text("owner_department").notNull(),
+  title: text("title").notNull(), status: text("status").notNull().default("pending_review"), formalizedByUserId: text("formalized_by_user_id").notNull(), formalizedBy: text("formalized_by").notNull(), formalizedAt: text("formalized_at").notNull(),
+  knowledgeDocumentId: text("knowledge_document_id").notNull(), knowledgeVersionId: text("knowledge_version_id").notNull(), auditLogId: text("audit_log_id"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`), updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [uniqueIndex("formal_artifacts_source_unique").on(table.sourceWritingArtifactId), index("formal_artifacts_document_idx").on(table.knowledgeDocumentId), index("formal_artifacts_owner_idx").on(table.ownerUserId), index("formal_artifacts_status_idx").on(table.status)]);
+
 // 公文私有参考材料只服务于当前工作区，不进入 documents 正式知识库，也不参与公共检索。
 export const writingPrivateReferences = sqliteTable("writing_private_references", {
   id: text("id").primaryKey(), writingDocumentId: text("writing_document_id").notNull(), fileName: text("file_name").notNull(),

@@ -1,7 +1,7 @@
 import { desc, eq } from "drizzle-orm";
 import { env } from "cloudflare:workers";
 import { getDb } from "../../../db";
-import { auditLogs, writingDocuments, writingPrivateReferences, writingVersions } from "../../../db/schema";
+import { auditLogs, writingArtifacts, writingDocuments, writingPrivateReferences, writingVersions } from "../../../db/schema";
 import { accessError, requireAccessUser } from "../../../lib/access";
 import { buildOutline, buildWritingKnowledgeQuery, checkWriting, resolveWritingKnowledge, summarizePrivateReferences, WRITING_TYPES, type WritingKnowledgeRetrieval, type WritingType } from "../../../lib/writing";
 import { normalizeStructuredWriting, structuredWritingToText } from "../../../lib/writing-structured";
@@ -78,6 +78,14 @@ async function writeWritingKnowledgeAudit(input: { db: ReturnType<typeof getDb>;
   } catch { /* 审计故障不影响已完成权限过滤后的写作生成。 */ }
 }
 
+// 写入非正式 Writing Artifact。输入为当前工作区已成功生成的版本和最小关联标识；只写 D1 私有成果表，绝不写 documents、公共索引或 RAG。
+async function createNonFormalWritingArtifact(input: { db: ReturnType<typeof getDb>; writingId: string; writingVersionId: string; user: { id: string; departmentName: string }; content: string; structuredContentJson: string; privateReferenceIds: string[]; formalEvidenceIds: string[]; now: string }) {
+  await input.db.insert(writingArtifacts).values({
+    id: crypto.randomUUID(), writingDocumentId: input.writingId, writingVersionId: input.writingVersionId, ownerUserId: input.user.id, ownerDepartment: input.user.departmentName,
+    content: input.content, structuredContentJson: input.structuredContentJson, privateReferenceIdsJson: JSON.stringify(input.privateReferenceIds), formalEvidenceIdsJson: JSON.stringify(input.formalEvidenceIds), status: "NON_FORMAL", createdAt: input.now, updatedAt: input.now,
+  });
+}
+
 // 说明：读取公文工作区，创建人只读取自己的草稿，系统管理员读取全部；最终稿不自动进入正式知识库。
 export async function GET(request: Request) {
   try {
@@ -143,7 +151,9 @@ export async function POST(request: Request) {
       const now = new Date().toISOString(); const checks = checkWriting(title, recipient, facts, outline);
       const nextVersionNo = Math.max(0, ...versions.map((version) => version.versionNo)) + 1;
       await db.update(writingDocuments).set({ documentType, title, recipient, facts, referenceQuery, referencesJson: "[]", status: "generated", updatedAt: now }).where(eq(writingDocuments.id, id));
-      await db.insert(writingVersions).values({ id: crypto.randomUUID(), writingDocumentId: id, versionNo: nextVersionNo, stage: "generated", content: generatedText, structuredContentJson: structured ? JSON.stringify(structured) : "", checksJson: JSON.stringify(checks), createdByUserId: user.id, createdBy: user.name, createdAt: now });
+      const writingVersionId = crypto.randomUUID(); const structuredContentJson = structured ? JSON.stringify(structured) : "";
+      await db.insert(writingVersions).values({ id: writingVersionId, writingDocumentId: id, versionNo: nextVersionNo, stage: "generated", content: generatedText, structuredContentJson, checksJson: JSON.stringify(checks), createdByUserId: user.id, createdBy: user.name, createdAt: now });
+      await createNonFormalWritingArtifact({ db, writingId: id, writingVersionId, user, content: generatedText, structuredContentJson, privateReferenceIds: privateReferences.map((item) => item.id), formalEvidenceIds: references.map((item) => `${item.documentId}/${item.versionId}/${item.chunkIndex}`), now });
       await writeWritingModelAudit({ db, user, writingId: id, result: generation, elapsedMs: Date.now() - startedAt });
       await db.insert(auditLogs).values({ id: crypto.randomUUID(), action: "更新公文提纲与引用依据", entityType: "writing_document", entityId: id, operator: user.name, detail: `${documentType}｜引用${references.length}条｜仅工作区`, createdAt: now });
       return Response.json({ id, outline, generated: structured, content: generatedText, references: [], privateReferences, checks, generation: { mode: generation.mode }, status: writing.status });
@@ -170,7 +180,9 @@ export async function POST(request: Request) {
       const generatedText = generation.content;
       const checks = checkWriting(title, recipient, facts, outline);
       await db.insert(writingDocuments).values({ id, documentType, title, submittingDepartment: user.departmentName, recipient, facts, referenceQuery, referencesJson: "[]", status: "outline", createdByUserId: user.id, createdBy: user.name, createdAt: now, updatedAt: now });
-      await db.insert(writingVersions).values({ id: versionId, writingDocumentId: id, versionNo: 1, stage: "generated", content: generatedText, structuredContentJson: structured ? JSON.stringify(structured) : "", checksJson: JSON.stringify(checks), createdByUserId: user.id, createdBy: user.name, createdAt: now });
+      const structuredContentJson = structured ? JSON.stringify(structured) : "";
+      await db.insert(writingVersions).values({ id: versionId, writingDocumentId: id, versionNo: 1, stage: "generated", content: generatedText, structuredContentJson, checksJson: JSON.stringify(checks), createdByUserId: user.id, createdBy: user.name, createdAt: now });
+      await createNonFormalWritingArtifact({ db, writingId: id, writingVersionId: versionId, user, content: generatedText, structuredContentJson, privateReferenceIds: [], formalEvidenceIds: references.map((item) => `${item.documentId}/${item.versionId}/${item.chunkIndex}`), now });
       await writeWritingModelAudit({ db, user, writingId: id, result: generation, elapsedMs: Date.now() - startedAt });
       await db.insert(auditLogs).values({ id: crypto.randomUUID(), action: "创建公文提纲", entityType: "writing_document", entityId: id, operator: user.name, detail: `${documentType}｜引用${references.length}条｜仅工作区`, createdAt: now });
       return Response.json({ id, outline, generated: structured, content: generatedText, references: [], privateReferences: [], checks, generation: { mode: generation.mode }, status: "generated" }, { status: 201 });
