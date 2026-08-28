@@ -12,6 +12,7 @@ import {
 } from "./model-gateway";
 import { embedTexts, readEmbeddingGatewayConfig } from "./embedding-gateway";
 import { DevD1VectorStore, type VectorStore } from "./vector-store";
+import { fuseRankedEvidence, HYBRID_RETRIEVAL_DEFAULTS, type FusedEvidence } from "./hybrid-fusion";
 
 // 完整标准化问题命中时会额外获得 12 分，因此默认可靠依据门槛也使用 12 分。
 // 这要求候选资料至少包含完整提问，或累积足够多个关键词命中，避免单个弱关键词触发回答。
@@ -41,6 +42,7 @@ type AuthorizedChunkRow = {
 };
 
 export type VectorKnowledgeEvidence = KnowledgeCitation & { chunkId: string };
+export type HybridKnowledgeEvidence = FusedEvidence<VectorKnowledgeEvidence>;
 
 // 判断资料是否满足正式 evidence 门槛。输入是已从 D1 读取的资料元数据，输出不涉及正文或模型调用。
 export function isFormalEvidenceDocument(document: typeof documents.$inferSelect, versionNo: number, versionStatus: string) {
@@ -113,16 +115,30 @@ export async function collectAuthorizedChunks(user: AccessUser) {
   return selectAuthorizedChunks(user, rows, grants);
 }
 
-export async function retrieveAuthorized(user: AccessUser, query: string) {
+function toKnowledgeEvidence(row: AuthorizedChunkRow, score: number): VectorKnowledgeEvidence {
+  return {
+    documentId: row.document.id, versionId: row.versionId, chunkId: row.chunk.id, title: row.document.title,
+    category: row.document.resourceCategory, sourceOrganization: row.document.sourceOrganization, documentDate: row.document.documentDate,
+    version: row.versionNo, excerpt: row.chunk.content.slice(0, 520), sourceType: row.document.sourceType,
+    chunkIndex: row.chunk.chunkIndex, location: `第${row.chunk.chunkIndex + 1}段`, score,
+  };
+}
+
+// 在已授权范围内执行原有关键词评分。输入已完成正式资料和 ACL 过滤，输出仅为候选排序，不读写数据库。
+function retrieveKeywordWithinScope(rows: AuthorizedChunkRow[], query: string, topK = 5) {
   const reliableScore = minimumReliableScore();
-  const rows = await collectAuthorizedChunks(user);
   return rows
     // 说明：collectAuthorizedChunks 已在关键词评分之前完成当前账号的角色、部门、数据级别和 ACL 过滤。
     .map(row => ({ ...row, score: relevance(query, row.chunk.content) }))
     // 说明：权限通过后仍需达到可解释的可靠依据门槛，单个弱关键词命中不能触发问答。
     .filter(row => row.score >= reliableScore)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 5);
+    .slice(0, topK);
+}
+
+export async function retrieveAuthorized(user: AccessUser, query: string) {
+  const rows = await collectAuthorizedChunks(user);
+  return retrieveKeywordWithinScope(rows, query);
 }
 
 // 在已授权 chunk scope 内执行开发阶段 exact cosine retrieval。Embedding 未配置或失败时返回空 evidence，绝不伪造结果。
@@ -131,7 +147,15 @@ export async function retrieveAuthorizedVector(
   query: string,
   options: { topK?: number; store?: VectorStore } = {},
 ): Promise<{ status: "success" | "no_scope" | "not_configured" | "timeout" | "gateway_error" | "invalid_response"; evidence: VectorKnowledgeEvidence[] }> {
-  const scopedRows = await collectAuthorizedChunks(user);
+  return retrieveVectorWithinScope(await collectAuthorizedChunks(user), query, options);
+}
+
+// 在同一已授权范围内执行向量召回。调用方负责先取得 scope，避免融合路径重复查询或先全库向量检索。
+async function retrieveVectorWithinScope(
+  scopedRows: AuthorizedChunkRow[],
+  query: string,
+  options: { topK?: number; store?: VectorStore } = {},
+): Promise<{ status: "success" | "no_scope" | "not_configured" | "timeout" | "gateway_error" | "invalid_response"; evidence: VectorKnowledgeEvidence[] }> {
   if (!scopedRows.length) return { status: "no_scope", evidence: [] };
 
   const config = readEmbeddingGatewayConfig(env as unknown as Record<string, string | undefined>);
@@ -150,14 +174,31 @@ export async function retrieveAuthorizedVector(
     evidence: hits.flatMap((hit) => {
       const row = rowsByChunkId.get(hit.chunkId);
       if (!row) return [];
-      return [{
-        documentId: row.document.id, versionId: row.versionId, chunkId: row.chunk.id, title: row.document.title,
-        category: row.document.resourceCategory, sourceOrganization: row.document.sourceOrganization, documentDate: row.document.documentDate,
-        version: row.versionNo, excerpt: row.chunk.content.slice(0, 520), sourceType: row.document.sourceType,
-        chunkIndex: row.chunk.chunkIndex, location: `第${row.chunk.chunkIndex + 1}段`, score: Number(hit.score.toFixed(6)),
-      }];
+      return [toKnowledgeEvidence(row, Number(hit.score.toFixed(6)))];
     }),
   };
+}
+
+// 将同一权限范围内的关键词与向量候选按 RRF 排名融合。向量网关不可用时仅返回关键词候选，并显式标注降级状态。
+export async function retrieveAuthorizedHybrid(
+  user: AccessUser,
+  query: string,
+  options: { keywordTopK?: number; vectorTopK?: number; fusionTopK?: number; rrfK?: number; store?: VectorStore } = {},
+): Promise<{ status: "hybrid" | "keyword_only" | "no_evidence"; vectorStatus: "success" | "no_scope" | "not_configured" | "timeout" | "gateway_error" | "invalid_response"; evidence: HybridKnowledgeEvidence[] }> {
+  // 必须先建立当前用户的正式授权 scope，两个召回分支均不能跨越这个范围。
+  const scopedRows = await collectAuthorizedChunks(user);
+  const keywordRows = retrieveKeywordWithinScope(scopedRows, query, options.keywordTopK ?? HYBRID_RETRIEVAL_DEFAULTS.keywordTopK);
+  const keywordEvidence = keywordRows.map((row) => toKnowledgeEvidence(row, Number(row.score.toFixed(1))));
+  const vector = await retrieveVectorWithinScope(scopedRows, query, {
+    topK: options.vectorTopK ?? HYBRID_RETRIEVAL_DEFAULTS.vectorTopK,
+    store: options.store,
+  });
+  const evidence = fuseRankedEvidence(keywordEvidence, vector.evidence, {
+    fusionTopK: options.fusionTopK ?? HYBRID_RETRIEVAL_DEFAULTS.fusionTopK,
+    rrfK: options.rrfK ?? HYBRID_RETRIEVAL_DEFAULTS.rrfK,
+  });
+  if (!evidence.length) return { status: "no_evidence", vectorStatus: vector.status, evidence };
+  return { status: vector.status === "success" ? "hybrid" : "keyword_only", vectorStatus: vector.status, evidence };
 }
 
 
