@@ -5,6 +5,7 @@ import { getDb } from "../../../../db";
 import { auditLogs, oaConnectorConfigs } from "../../../../db/schema";
 import { accessError, requireAccessUser } from "../../../../lib/access";
 import { encryptOaCredentials, toPublicOaConnector, validateOaConnectorInput, type OaConnectorInput } from "../../../../lib/oa-connector-config";
+import { getRequestId, writeStructuredLog } from "../../../../lib/runtime-observability";
 
 export const runtime = "edge";
 function encryptionKey() { return (env as unknown as Record<string, string | undefined>).OA_CONFIG_ENCRYPTION_KEY || (typeof process === "undefined" ? "" : process.env.OA_CONFIG_ENCRYPTION_KEY) || ""; }
@@ -21,6 +22,6 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
     const { id } = await context.params; const input = await request.json() as OaConnectorInput; const normalized = validateOaConnectorInput(input); const db = getDb(); const [existing] = await db.select().from(oaConnectorConfigs).where(eq(oaConnectorConfigs.id, id)).limit(1); if (!existing) return Response.json({ error: "OA 配置不存在" }, { status: 404 });
     const hasCredentials = input.credentials && Object.values(input.credentials).some(Boolean); const credentialCiphertext = input.clearCredentials ? null : hasCredentials ? await encryptOaCredentials(input.credentials!, encryptionKey()) : existing.credentialCiphertext; const now = new Date().toISOString();
     await db.update(oaConnectorConfigs).set({ name: input.name.trim(), baseUrl: normalized.baseUrl, endpointPath: normalized.endpointPath, requestMethod: input.requestMethod, contentType: input.contentType?.trim() || "application/json", authType: input.authType, customAuthHeaderName: input.customAuthHeaderName?.trim() || null, headersJson: JSON.stringify(normalized.headers), credentialCiphertext, timeoutMs: normalized.timeoutMs, enabled: Boolean(input.enabled), updatedAt: now }).where(eq(oaConnectorConfigs.id, id));
-    await db.insert(auditLogs).values({ id: crypto.randomUUID(), action: "oa_connector_config_updated", entityType: "oa_connector_config", entityId: id, operator: user.id, detail: "OA 连接器配置已更新；未记录地址或凭证。", createdAt: now }); const [saved] = await db.select().from(oaConnectorConfigs).where(eq(oaConnectorConfigs.id, id)); return Response.json({ connector: saved && toPublicOaConnector(saved) });
+    const requestId = getRequestId(request); await db.insert(auditLogs).values({ id: crypto.randomUUID(), action: "oa_connector_config_updated", entityType: "oa_connector_config", entityId: id, operator: user.id, detail: `OA 连接器配置已更新；未记录地址或凭证。｜request_id=${requestId}`, requestId, createdAt: now }); writeStructuredLog({ requestId, user, route: "oa.connectors.update", result: "success", latencyMs: 0 }); const [saved] = await db.select().from(oaConnectorConfigs).where(eq(oaConnectorConfigs.id, id)); return Response.json({ connector: saved && toPublicOaConnector(saved) });
   } catch (error) { return accessError(error, "更新 OA 配置失败"); }
 }

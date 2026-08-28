@@ -6,6 +6,7 @@ import { accessError, requireAccessUser } from "../../../lib/access";
 import { buildOutline, buildWritingKnowledgeQuery, checkWriting, resolveWritingKnowledge, summarizePrivateReferences, WRITING_TYPES, type WritingKnowledgeRetrieval, type WritingType } from "../../../lib/writing";
 import { normalizeStructuredWriting, structuredWritingToText } from "../../../lib/writing-structured";
 import { generateWritingWithGateway, resolveWritingModelRuntime, type WritingGenerationResult } from "../../../lib/writing-model-gateway";
+import { getRequestId, writeStructuredLog } from "../../../lib/runtime-observability";
 
 export const runtime = "edge";
 
@@ -56,23 +57,24 @@ async function loadPrivateReferences(id: string) {
 }
 
 // 说明：记录模型生成的最小审计信息。输入为已完成权限过滤的生成结果和工作区标识，输出仅写 audit_logs，不保存正文、提示词、密钥、引用片段或私有材料内容。
-async function writeWritingModelAudit(input: { db: ReturnType<typeof getDb>; user: { id: string; name: string }; writingId: string; result: WritingGenerationResult; elapsedMs: number }) {
+async function writeWritingModelAudit(input: { db: ReturnType<typeof getDb>; user: { id: string; name: string }; writingId: string; result: WritingGenerationResult; elapsedMs: number; requestId: string }) {
   try {
     await input.db.insert(auditLogs).values({
       id: crypto.randomUUID(), action: "公文写作模型生成", entityType: "writing_document", entityId: input.writingId, operator: input.user.name,
-      detail: `userId=${input.user.id}｜logicalModel=Qwen3.8-27B｜requestModel=${input.result.model}｜result=${input.result.mode}｜category=${input.result.category}｜elapsedMs=${input.elapsedMs}｜inputChars=${input.result.inputChars}｜outputChars=${input.result.outputChars}`,
+      detail: `userId=${input.user.id}｜logicalModel=Qwen3.8-27B｜requestModel=${input.result.model}｜result=${input.result.mode}｜category=${input.result.category}｜elapsedMs=${input.elapsedMs}｜inputChars=${input.result.inputChars}｜outputChars=${input.result.outputChars}｜request_id=${input.requestId}`, requestId: input.requestId,
       createdAt: new Date().toISOString(),
     });
   } catch { /* 审计故障不能让已安全生成的工作区写入失败。 */ }
+  writeStructuredLog({ requestId: input.requestId, user: input.user, route: "writing.generate", result: input.result.mode, latencyMs: input.elapsedMs, errorCode: input.result.mode === "failed" ? input.result.category : undefined });
 }
 
 // 记录写作时正式知识注入的最小审计。只保存是否使用、证据主键和检索状态，不保存私有材料、正文、提示词或证据文本。
-async function writeWritingKnowledgeAudit(input: { db: ReturnType<typeof getDb>; user: { id: string; name: string }; writingId: string; retrieval: WritingKnowledgeRetrieval }) {
+async function writeWritingKnowledgeAudit(input: { db: ReturnType<typeof getDb>; user: { id: string; name: string }; writingId: string; retrieval: WritingKnowledgeRetrieval; requestId: string }) {
   try {
     const evidenceIds = input.retrieval.references.map((item) => `${item.documentId}/${item.versionId}/${item.chunkIndex}`).join(",") || "none";
     await input.db.insert(auditLogs).values({
       id: crypto.randomUUID(), action: "公文写作正式知识注入", entityType: "writing_document", entityId: input.writingId, operator: input.user.name,
-      detail: `formalKnowledgeUsed=${input.retrieval.formalKnowledgeUsed}; evidence=${evidenceIds}; retrieval=${input.retrieval.retrievalStatus}; vector=${input.retrieval.vectorStatus}; reranker=${input.retrieval.rerankerStatus}; rerankerUsed=${input.retrieval.rerankerUsed}`,
+      detail: `formalKnowledgeUsed=${input.retrieval.formalKnowledgeUsed}; evidence=${evidenceIds}; retrieval=${input.retrieval.retrievalStatus}; vector=${input.retrieval.vectorStatus}; reranker=${input.retrieval.rerankerStatus}; rerankerUsed=${input.retrieval.rerankerUsed}｜request_id=${input.requestId}`, requestId: input.requestId,
       createdAt: new Date().toISOString(),
     });
   } catch { /* 审计故障不影响已完成权限过滤后的写作生成。 */ }
@@ -139,10 +141,10 @@ export async function POST(request: Request) {
       // 结构化初稿只使用已确认事实、已授权正式依据和私有材料数量；网关绝不接收私有原文、文件名或无权资料。
       const startedAt = Date.now();
       const generation = await generateWritingWithGateway({ documentType, title, recipient, submittingDepartment: writing.submittingDepartment, facts, referenceQuery, references, privateReferenceGuidance: privateReferences.map((item) => ({ format: item.parseFormat, excerpt: item.excerpt, locations: item.locations })) }, getWritingModelRuntime());
-      await writeWritingKnowledgeAudit({ db, user, writingId: id, retrieval: knowledge });
+      await writeWritingKnowledgeAudit({ db, user, writingId: id, retrieval: knowledge, requestId: getRequestId(request) });
       // 模型失败时只记录最小审计，保留已有工作区和正文，不创建或覆盖 writing_versions。
       if (generation.mode !== "model" || !generation.content) {
-        await writeWritingModelAudit({ db, user, writingId: id, result: generation, elapsedMs: Date.now() - startedAt });
+        await writeWritingModelAudit({ db, user, writingId: id, result: generation, elapsedMs: Date.now() - startedAt, requestId: getRequestId(request) });
         return Response.json({ error: writingGenerationError(generation.category) }, { status: 503 });
       }
       const structured = generation.structured;
@@ -154,7 +156,7 @@ export async function POST(request: Request) {
       const writingVersionId = crypto.randomUUID(); const structuredContentJson = structured ? JSON.stringify(structured) : "";
       await db.insert(writingVersions).values({ id: writingVersionId, writingDocumentId: id, versionNo: nextVersionNo, stage: "generated", content: generatedText, structuredContentJson, checksJson: JSON.stringify(checks), createdByUserId: user.id, createdBy: user.name, createdAt: now });
       await createNonFormalWritingArtifact({ db, writingId: id, writingVersionId, user, content: generatedText, structuredContentJson, privateReferenceIds: privateReferences.map((item) => item.id), formalEvidenceIds: references.map((item) => `${item.documentId}/${item.versionId}/${item.chunkIndex}`), now });
-      await writeWritingModelAudit({ db, user, writingId: id, result: generation, elapsedMs: Date.now() - startedAt });
+      await writeWritingModelAudit({ db, user, writingId: id, result: generation, elapsedMs: Date.now() - startedAt, requestId: getRequestId(request) });
       await db.insert(auditLogs).values({ id: crypto.randomUUID(), action: "更新公文提纲与引用依据", entityType: "writing_document", entityId: id, operator: user.name, detail: `${documentType}｜引用${references.length}条｜仅工作区`, createdAt: now });
       return Response.json({ id, outline, generated: structured, content: generatedText, references: [], privateReferences, checks, generation: { mode: generation.mode }, status: writing.status });
     }
@@ -170,10 +172,10 @@ export async function POST(request: Request) {
       const outline = buildOutline(documentType, title, recipient, facts, references, []);
       const now = new Date().toISOString(); const id = crypto.randomUUID(); const versionId = crypto.randomUUID(); const startedAt = Date.now();
       const generation = await generateWritingWithGateway({ documentType, title, recipient, submittingDepartment: user.departmentName, facts, referenceQuery, references, privateReferenceGuidance: [] }, getWritingModelRuntime());
-      await writeWritingKnowledgeAudit({ db, user, writingId: id, retrieval: knowledge });
+      await writeWritingKnowledgeAudit({ db, user, writingId: id, retrieval: knowledge, requestId: getRequestId(request) });
       // 首次模型失败不创建 writing_documents 或 writing_versions，避免失败时留下模拟或空白正文。
       if (generation.mode !== "model" || !generation.content) {
-        await writeWritingModelAudit({ db, user, writingId: id, result: generation, elapsedMs: Date.now() - startedAt });
+        await writeWritingModelAudit({ db, user, writingId: id, result: generation, elapsedMs: Date.now() - startedAt, requestId: getRequestId(request) });
         return Response.json({ error: writingGenerationError(generation.category) }, { status: 503 });
       }
       const structured = generation.structured;
@@ -183,7 +185,7 @@ export async function POST(request: Request) {
       const structuredContentJson = structured ? JSON.stringify(structured) : "";
       await db.insert(writingVersions).values({ id: versionId, writingDocumentId: id, versionNo: 1, stage: "generated", content: generatedText, structuredContentJson, checksJson: JSON.stringify(checks), createdByUserId: user.id, createdBy: user.name, createdAt: now });
       await createNonFormalWritingArtifact({ db, writingId: id, writingVersionId: versionId, user, content: generatedText, structuredContentJson, privateReferenceIds: [], formalEvidenceIds: references.map((item) => `${item.documentId}/${item.versionId}/${item.chunkIndex}`), now });
-      await writeWritingModelAudit({ db, user, writingId: id, result: generation, elapsedMs: Date.now() - startedAt });
+      await writeWritingModelAudit({ db, user, writingId: id, result: generation, elapsedMs: Date.now() - startedAt, requestId: getRequestId(request) });
       await db.insert(auditLogs).values({ id: crypto.randomUUID(), action: "创建公文提纲", entityType: "writing_document", entityId: id, operator: user.name, detail: `${documentType}｜引用${references.length}条｜仅工作区`, createdAt: now });
       return Response.json({ id, outline, generated: structured, content: generatedText, references: [], privateReferences: [], checks, generation: { mode: generation.mode }, status: "generated" }, { status: 201 });
     }

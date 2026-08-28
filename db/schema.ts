@@ -119,8 +119,8 @@ export const blockedTerms = sqliteTable("blocked_terms", {
 
 export const auditLogs = sqliteTable("audit_logs", {
   id: text("id").primaryKey(), action: text("action").notNull(), entityType: text("entity_type").notNull(), entityId: text("entity_id").notNull(),
-  operator: text("operator").notNull().default("项目管理员"), detail: text("detail").notNull(), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-}, (table) => [index("audit_logs_created_at_idx").on(table.createdAt)]);
+  operator: text("operator").notNull().default("项目管理员"), detail: text("detail").notNull(), requestId: text("request_id"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [index("audit_logs_created_at_idx").on(table.createdAt), index("audit_logs_request_id_idx").on(table.requestId)]);
 
 // 知识会话仅保存用户提问、系统回答与最小引用快照；正式资料正文仍只保留在 documents/document_chunks。
 export const knowledgeConversations = sqliteTable("knowledge_conversations", {
