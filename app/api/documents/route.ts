@@ -45,6 +45,11 @@ export async function POST(request: Request) {
     const trialDataClass = String(body.trialDataClass || "T2-内部脱敏测试");
     if (!new Set(["T1-公开资料", "T2-内部脱敏测试", "T3-部门隔离测试"]).has(trialDataClass)) return Response.json({ error: "试用数据类别不符合标准" }, { status: 400 });
     let securityLevel = String(body.securityLevel || "内部");
+    // 批量入口与手工录入共用 D1-D4 展示值；写入既有正式资料表前统一映射，D4 仍必须走后续专用流程。
+    if (securityLevel === "D1") securityLevel = "公开";
+    if (securityLevel === "D2") securityLevel = "内部";
+    if (securityLevel === "D3") securityLevel = "敏感";
+    if (securityLevel === "D4" || securityLevel === "机密" || securityLevel === "confidential") return Response.json({ error: "D4/机密资料不能通过当前在线录入入口提交" }, { status: 403 });
     let permissionScope = String(body.permissionScope || "责任部门");
     if (trialDataClass === "T1-公开资料") { securityLevel = "公开"; permissionScope = "公司全员"; }
     if (trialDataClass === "T3-部门隔离测试") permissionScope = "责任部门";

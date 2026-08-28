@@ -41,7 +41,9 @@
     "verify:ai-archive-management": "node --experimental-strip-types scripts/verify-ai-archive-management.ts",
     "verify:policy-candidate-lifecycle": "node --experimental-strip-types scripts/verify-policy-candidate-lifecycle.ts",
     "verify:oa-connector-foundation": "node --experimental-strip-types scripts/verify-oa-connector-foundation.ts",
-    "verify:runtime-observability": "node --experimental-strip-types scripts/verify-runtime-observability.ts"
+    "verify:runtime-observability": "node --experimental-strip-types scripts/verify-runtime-observability.ts",
+    "verify:admin-batch-knowledge-ingestion": "node --experimental-strip-types scripts/verify-admin-batch-knowledge-ingestion.ts",
+    "verify:local:admin-batch-knowledge-ingestion": "node --experimental-strip-types scripts/verify-local-admin-batch-knowledge-ingestion.ts"
   },
   "dependencies": {
     "@mdgate/ppt": "0.6.20",

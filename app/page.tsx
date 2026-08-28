@@ -17,6 +17,8 @@ type AuditLog = { id: string; action: string; operator: string; detail: string; 
 type BlockedTerm = { id: string; term: string; category: string; matchScope: string; note: string | null; enabled: boolean; createdBy: string; createdAt: string; updatedAt: string };
 type DocumentVersion = { id: string; versionNo: number; content: string; changeSummary: string; versionStatus: string; createdBy: string; createdAt: string };
 type BatchUploadSummary = { total: number; succeeded: number; failed: Array<{ fileName: string; reason: string }> };
+type BatchFileStatus = { fileName: string; size: number; type: string; status: "待预检" | "上传中" | "成功" | "跳过" | "失败"; reason?: string };
+type KnowledgeImportBatch = { id: string; datasetName: string; totalCount: number; successCount: number; failedCount: number; skippedCount: number; status: string; createdAt: string; completedAt: string | null };
 type SessionUser = { id: string; name: string; email: string; employeeNo: string | null; departmentName: string; role: string; positionLevel: number; clearanceLevel: number; status: string };
 type KnowledgeResult = {
   answer: string;
@@ -698,6 +700,9 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
   const [ingestMode, setIngestMode] = useState<"file" | "text">("file");
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [batchUploadSummary, setBatchUploadSummary] = useState<BatchUploadSummary | null>(null);
+  const [batchDatasetName, setBatchDatasetName] = useState("LOCAL_TRIAL_20260828");
+  const [batchFileStatuses, setBatchFileStatuses] = useState<BatchFileStatus[]>([]);
+  const [importBatches, setImportBatches] = useState<KnowledgeImportBatch[]>([]);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
   const [selected, setSelected] = useState<DocumentRecord | null>(null);
@@ -711,10 +716,16 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [reviewForm, setReviewForm] = useState({ resourceCategory: "", sourceOrganization: "", documentDate: "", applicableScope: "", reliabilityScore: "60", comment: "" });
-  const [form, setForm] = useState({ title: "", documentType: "制度文件", sourceType: "人工录入", ownerDepartment: user?.departmentName || "集团办公室", securityLevel: "内部", permissionScope: "责任部门", trialDataClass: "T2-内部脱敏测试", resourceCategory: "其他", sourceOrganization: "", documentDate: "", applicableScope: "", content: "", confirmedDesensitized: false });
+  const [form, setForm] = useState({ title: "", documentType: "制度文件", sourceType: "人工录入", ownerDepartment: user?.departmentName || "集团办公室", securityLevel: "D2", permissionScope: "责任部门", trialDataClass: "T2-内部脱敏测试", resourceCategory: "其他", sourceOrganization: "", documentDate: "", applicableScope: "", content: "", confirmedDesensitized: false });
 
   function setField(name: string, value: string) { setForm(previous => ({ ...previous, [name]: value })); }
   const isSystemAdmin = user?.role === "system_admin";
+  const canManageLibrary = Boolean(user && ["system_admin", "knowledge_admin"].includes(user.role));
+  const loadImportBatches = useCallback(async () => {
+    if (!canManageLibrary) return;
+    const response = await fetch("/api/knowledge-import-batches?pageSize=10", { cache: "no-store" });
+    if (response.ok) { const result = await response.json() as { batches?: KnowledgeImportBatch[] }; setImportBatches(result.batches || []); }
+  }, [canManageLibrary]);
   const visibleRecords = records.filter((record) =>
     (statusFilter === "all" || record.resourceStatus === statusFilter) &&
     (categoryFilter === "all" || record.resourceCategory === categoryFilter) &&
@@ -767,34 +778,43 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
 
   async function saveUpload() {
     if (!uploadFiles.length) { setNotice("请先选择脱敏文件。"); return; }
-    if (uploadFiles.length === 1 && !form.title.trim()) { setNotice("请填写文件名称。"); return; }
     if (!form.confirmedDesensitized) { setNotice("请先勾选脱敏确认。"); return; }
     setSaving(true); setNotice("");
     const failed: BatchUploadSummary["failed"] = [];
     let succeeded = 0;
+    let batchId = "";
     try {
+      const created = await fetch("/api/knowledge-import-batches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ datasetName: batchDatasetName, totalCount: uploadFiles.length, documentType: form.documentType, resourceCategory: form.resourceCategory, securityLevel: form.securityLevel, permissionScope: form.permissionScope, ownerDepartment: form.ownerDepartment, trialDataClass: form.trialDataClass, sourceOrganization: form.sourceOrganization, documentDate: form.documentDate, applicableScope: form.applicableScope }) });
+      const batchResult = await created.json() as { batch?: { id?: string }; error?: string };
+      if (!created.ok || !batchResult.batch?.id) throw new Error(batchResult.error || "创建资料导入批次失败");
+      batchId = batchResult.batch.id;
       // 每份文件仍单独走既有服务端安全链：格式/大小、禁止词、R2 回滚、D1 版本与待审核状态互不影响。
       for (const file of uploadFiles) {
+        setBatchFileStatuses(items => items.map(item => item.fileName === file.name && item.size === file.size ? { ...item, status: "上传中", reason: undefined } : item));
         const extension = file.name.split(".").pop()?.toLowerCase() || "";
-        if (!new Set(["docx", "pdf", "txt", "md", "xlsx", "xls", "pptx", "ppt"]).has(extension)) { failed.push({ fileName: file.name, reason: "不支持的文件类型" }); continue; }
-        if (file.size <= 0 || file.size > 8 * 1024 * 1024) { failed.push({ fileName: file.name, reason: "文件为空或超过 8MB 限制" }); continue; }
+        if (!new Set(["docx", "pdf", "txt", "md", "xlsx", "xls", "pptx", "ppt"]).has(extension)) { const reason = "不支持的文件类型"; failed.push({ fileName: file.name, reason }); setBatchFileStatuses(items => items.map(item => item.fileName === file.name && item.size === file.size ? { ...item, status: "失败", reason } : item)); continue; }
+        if (file.size <= 0 || file.size > 8 * 1024 * 1024) { const reason = "文件为空或超过 8MB 限制"; failed.push({ fileName: file.name, reason }); setBatchFileStatuses(items => items.map(item => item.fileName === file.name && item.size === file.size ? { ...item, status: "失败", reason } : item)); continue; }
         const payload = new FormData();
         payload.set("file", file); payload.set("title", uploadFiles.length === 1 ? form.title : file.name.replace(/\.[^.]+$/, "")); payload.set("documentType", form.documentType);
         payload.set("ownerDepartment", form.ownerDepartment); payload.set("securityLevel", form.securityLevel);
         payload.set("permissionScope", form.permissionScope); payload.set("trialDataClass", form.trialDataClass); payload.set("confirmedDesensitized", "true");
         payload.set("resourceCategory", form.resourceCategory); payload.set("sourceOrganization", form.sourceOrganization);
         payload.set("documentDate", form.documentDate); payload.set("applicableScope", form.applicableScope);
+        payload.set("batchId", batchId); payload.set("batchItemKey", `${file.name}:${file.size}:${file.lastModified}`);
         try {
           const response = await fetch("/api/documents/upload", { method: "POST", body: payload });
           const result = await response.json() as { error?: string };
-          if (!response.ok) { failed.push({ fileName: file.name, reason: result.error || "上传失败" }); continue; }
+          if (!response.ok) { const reason = result.error || "上传失败"; failed.push({ fileName: file.name, reason }); setBatchFileStatuses(items => items.map(item => item.fileName === file.name && item.size === file.size ? { ...item, status: response.status === 409 ? "跳过" : "失败", reason } : item)); continue; }
           succeeded += 1;
-        } catch { failed.push({ fileName: file.name, reason: "网络请求失败" }); }
+          setBatchFileStatuses(items => items.map(item => item.fileName === file.name && item.size === file.size ? { ...item, status: "成功" } : item));
+        } catch { const reason = "网络请求失败"; failed.push({ fileName: file.name, reason }); setBatchFileStatuses(items => items.map(item => item.fileName === file.name && item.size === file.size ? { ...item, status: "失败", reason } : item)); }
       }
+      await fetch(`/api/knowledge-import-batches/${batchId}`, { method: "POST" });
       setBatchUploadSummary({ total: uploadFiles.length, succeeded, failed });
       setUploadFiles([]); setForm({ ...form, title: "", content: "", confirmedDesensitized: false });
       setNotice(`本批共处理 ${uploadFiles.length} 份：成功 ${succeeded} 份，失败 ${failed.length} 份。所有成功文件均已提交正式资料审核。`);
       await refresh();
+      await loadImportBatches();
     } catch (error) { setNotice(error instanceof Error ? error.message : "上传失败"); }
     finally { setSaving(false); }
   }
@@ -824,20 +844,21 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
   return <section className="page"><PageTitle kicker="知识中枢" title="知识资源" text="统一管理OA转载、人工上传、政府政策、AI草稿、人工修改稿和最终定稿；原文、元数据、权限和版本同步留存。"/>
     <div className="resource-capabilities">{[["多级目录","按业务、部门和专题组织"],["元数据与标签","来源、文号、状态、密级、责任人"],["版本与时序","现行、修订、废止完整留痕"],["知识加工","解析、切片、抽取、向量与结构化"],["检索与统计","全文/语义/混合检索及访问统计"]].map(item => <div className="panel" key={item[0]}><strong>{item[0]}</strong><span>{item[1]}</span></div>)}</div>
     <div className="data-flow"><div><b>01</b><strong>原始资料层</strong><span>OA原文、政府网页、人工录入</span></div><i>→</i><div><b>02</b><strong>加工与草稿层</strong><span>解析文本、AI草稿、人工修改稿</span></div><i>→</i><div><b>03</b><strong>正式知识层</strong><span>经审核的现行文件和最终定稿</span></div></div>
-    <div className="library-actions"><div><strong>资料台账</strong><span>共 {records.length} 份真实记录</span></div>{isSystemAdmin && <button onClick={() => setAdding(!adding)}>{adding ? "取消新增" : "＋ 新增测试资料"}</button>}</div>
+    <div className="library-actions"><div><strong>资料台账</strong><span>共 {records.length} 份真实记录</span></div>{canManageLibrary && <button onClick={() => setAdding(!adding)}>{adding ? "取消导入" : "＋ 集团资料批量导入"}</button>}</div>
     {notice && <div className="notice">{notice}</div>}
+    {canManageLibrary && importBatches.length > 0 && <section className="panel import-batch-history"><div><strong>最近资料导入批次</strong><span>每个批次和逐文件结果均已持久化，可用于核对导入数量与失败原因。</span></div>{importBatches.map(batch => <article key={batch.id}><b title={batch.datasetName}>{batch.datasetName}</b><span>{batch.totalCount} 份 · 成功 {batch.successCount} · 失败 {batch.failedCount} · 跳过 {batch.skippedCount}</span><em className={`record-status ${batch.status}`}>{batch.status === "completed" ? "已完成" : "处理中"}</em></article>)}</section>}
     {adding && <div className="panel ingest-form">
       <div className="trial-rule"><Icon name="shield" size={18}/><div><strong>当前为试用数据入口</strong><span>只允许公开资料、内部脱敏测试资料和部门隔离测试资料；真实敏感资料与禁止项不得上传。</span></div></div>
       <div className="ingest-mode"><button className={ingestMode === "file" ? "active" : ""} onClick={() => setIngestMode("file")}>上传文件</button><button className={ingestMode === "text" ? "active" : ""} onClick={() => setIngestMode("text")}>粘贴正文</button><span>{ingestMode === "file" ? "支持 DOCX、PDF、TXT、MD、XLSX、XLS、PPTX、PPT；XLS/PPT 可安全保存并按状态继续处理。" : "适合快速粘贴一小段脱敏制度进行测试。"}</span></div>
-      {ingestMode === "file" && <><label className="file-drop"><input type="file" multiple accept=".docx,.pdf,.txt,.md,.xlsx,.xls,.pptx,.ppt" onChange={event => { const files = [...(event.target.files || [])]; const unique = files.filter((file, index) => files.findIndex(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified) === index); setUploadFiles(unique); setBatchUploadSummary(null); if (unique.length === 1 && !form.title) setField("title", unique[0].name.replace(/\.[^.]+$/, "")); }}/><Icon name="folder" size={24}/><span><strong>{uploadFiles.length ? `已选择 ${uploadFiles.length} 份文件` : "选择脱敏文件"}</strong><small>{uploadFiles.length === 1 ? `${uploadFiles[0].name} · ${(uploadFiles[0].size / 1024).toFixed(1)} KB` : "可一次选择多份文件；单个文件不超过 8MB"}</small></span></label>{batchUploadSummary && <div className="notice"><strong>本批处理结果：</strong>共 {batchUploadSummary.total} 份，成功 {batchUploadSummary.succeeded} 份，失败 {batchUploadSummary.failed.length} 份。{batchUploadSummary.failed.length > 0 && <ul>{batchUploadSummary.failed.slice(0, 10).map(item => <li key={`${item.fileName}-${item.reason}`}>{item.fileName}：{item.reason}</li>)}{batchUploadSummary.failed.length > 10 && <li>其余 {batchUploadSummary.failed.length - 10} 份失败文件请查看本次选择后重新处理。</li>}</ul>}</div>}</>}
+      {ingestMode === "file" && <><label className="file-drop"><input type="file" multiple accept=".docx,.pdf,.txt,.md,.xlsx,.xls,.pptx,.ppt" onChange={event => { const files = [...(event.target.files || [])]; const unique = files.filter((file, index) => files.findIndex(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified) === index); setUploadFiles(unique); setBatchFileStatuses(unique.map(file => ({ fileName: file.name, size: file.size, type: file.name.split(".").pop()?.toUpperCase() || "FILE", status: "待预检" }))); setBatchUploadSummary(null); if (unique.length === 1 && !form.title) setField("title", unique[0].name.replace(/\.[^.]+$/, "")); }}/><Icon name="folder" size={24}/><span><strong>{uploadFiles.length ? `已选择 ${uploadFiles.length} 份文件` : "选择脱敏文件"}</strong><small>{uploadFiles.length === 1 ? `${uploadFiles[0].name} · ${(uploadFiles[0].size / 1024).toFixed(1)} KB` : "可一次选择多份文件；单个文件不超过 8MB"}</small></span></label><div className="batch-file-list">{batchFileStatuses.map(item => <div key={`${item.fileName}-${item.size}`}><b title={item.fileName}>{item.fileName}</b><span>{item.type} · {(item.size / 1024).toFixed(1)} KB</span><em className={`batch-status ${item.status}`}>{item.status}{item.reason ? `：${item.reason}` : ""}</em></div>)}</div>{batchUploadSummary && <div className="notice"><strong>本批处理结果：</strong>共 {batchUploadSummary.total} 份，成功 {batchUploadSummary.succeeded} 份，失败或跳过 {batchUploadSummary.failed.length} 份。结果已保存到批次记录。</div>}</>}
       <div className="form-grid">
-        <label><span>文件名称 *</span><input value={form.title} onChange={e => setField("title", e.target.value)} placeholder="例如：集团采购管理办法（试行）"/></label>
-        <label><span>试用数据类别 *</span><select value={form.trialDataClass} onChange={e => { const value = e.target.value; setField("trialDataClass", value); if (value === "T1-公开资料") { setField("securityLevel", "公开"); setField("permissionScope", "公司全员"); } if (value === "T3-部门隔离测试") setField("permissionScope", "责任部门"); }}><option>T1-公开资料</option><option>T2-内部脱敏测试</option><option>T3-部门隔离测试</option></select></label>
+        <label><span>{ingestMode === "file" ? "资料集名称 *" : "文件名称 *"}</span><input value={ingestMode === "file" ? batchDatasetName : form.title} onChange={e => ingestMode === "file" ? setBatchDatasetName(e.target.value) : setField("title", e.target.value)} placeholder={ingestMode === "file" ? "例如：LOCAL_TRIAL_20260828" : "例如：集团采购管理办法（试行）"}/></label>
+        <label><span>试用数据类别 *</span><select value={form.trialDataClass} onChange={e => { const value = e.target.value; setField("trialDataClass", value); if (value === "T1-公开资料") { setField("securityLevel", "D1"); setField("permissionScope", "公司全员"); } if (value === "T3-部门隔离测试") setField("permissionScope", "责任部门"); }}><option>T1-公开资料</option><option>T2-内部脱敏测试</option><option>T3-部门隔离测试</option></select></label>
         <label><span>文件类型</span><select value={form.documentType} onChange={e => setField("documentType", e.target.value)}><option>制度文件</option><option>通知</option><option>请示</option><option>工作情况汇报</option><option>会议纪要</option><option>政策文件</option><option>其他资料</option></select></label>
         <label><span>数据来源</span><select disabled={ingestMode === "file"} value={ingestMode === "file" ? "文件上传" : form.sourceType} onChange={e => setField("sourceType", e.target.value)}><option>文件上传</option><option>人工录入</option><option>OA批量导出</option><option>AI生成定稿</option><option>政府官网</option></select></label>
         <label><span>责任部门</span><select value={form.ownerDepartment} onChange={e => setField("ownerDepartment", e.target.value)}><option>集团办公室</option><option>科技与信息化部门</option><option>财务管理部</option><option>运营管理部</option><option>所属子公司</option></select></label>
-        <label><span>数据级别</span><select disabled={form.trialDataClass === "T1-公开资料"} value={form.securityLevel} onChange={e => setField("securityLevel", e.target.value)}><option>公开</option><option>内部</option>{(user?.clearanceLevel || 0) >= 3 && <option>敏感</option>}</select></label>
-        <label><span>可查看范围</span><select disabled={form.trialDataClass === "T1-公开资料" || form.trialDataClass === "T3-部门隔离测试"} value={form.permissionScope} onChange={e => setField("permissionScope", e.target.value)}><option>公司全员</option><option>集团本部</option><option>责任部门</option><option>领导班子</option><option>指定人员</option></select></label>
+        <label><span>数据级别</span><select disabled={form.trialDataClass === "T1-公开资料"} value={form.securityLevel} onChange={e => setField("securityLevel", e.target.value)}><option value="D1">D1（公开）</option><option value="D2">D2（内部）</option>{(user?.clearanceLevel || 0) >= 3 && <option value="D3">D3（敏感）</option>}<option value="D4">D4（机密，当前在线入口不支持）</option></select></label>
+        <label><span>可见范围 / ACL</span><select disabled={form.trialDataClass === "T1-公开资料" || form.trialDataClass === "T3-部门隔离测试"} value={form.permissionScope} onChange={e => setField("permissionScope", e.target.value)}><option>公司全员</option><option>集团本部</option><option>责任部门</option><option>领导班子</option><option>指定人员</option></select></label>
         <label><span>资料类别</span><select value={(form as Record<string, string>).resourceCategory || form.documentType} onChange={e => setField("resourceCategory", e.target.value)}><option>制度规范</option><option>正式通知</option><option>工作方案</option><option>会议纪要</option><option>合同模板</option><option>项目资料</option><option>其他</option></select></label>
         <label><span>来源单位</span><input value={(form as Record<string, string>).sourceOrganization || ""} onChange={e => setField("sourceOrganization", e.target.value)} placeholder="可在审核前补充"/></label>
         <label><span>文件日期</span><input type="date" value={(form as Record<string, string>).documentDate || ""} onChange={e => setField("documentDate", e.target.value)}/></label>

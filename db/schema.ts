@@ -29,8 +29,8 @@ export const documents = sqliteTable("documents", {
   sourceOrganization: text("source_organization"), documentDate: text("document_date"), applicableScope: text("applicable_scope"), reliabilityScore: integer("reliability_score").notNull().default(0), reviewNote: text("review_note"),
   knowledgeStatus: text("knowledge_status").notNull().default("pending"), currentVersion: integer("current_version").notNull().default(1),
   createdBy: text("created_by").notNull().default("项目管理员"), createdByUserId: text("created_by_user_id"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-}, (table) => [index("documents_updated_at_idx").on(table.updatedAt), index("documents_status_idx").on(table.knowledgeStatus), index("documents_resource_status_idx").on(table.resourceStatus), index("documents_source_idx").on(table.sourceType)]);
+  datasetId: text("dataset_id"), importBatchId: text("import_batch_id"), updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [index("documents_updated_at_idx").on(table.updatedAt), index("documents_status_idx").on(table.knowledgeStatus), index("documents_resource_status_idx").on(table.resourceStatus), index("documents_source_idx").on(table.sourceType), index("documents_dataset_idx").on(table.datasetId), index("documents_import_batch_idx").on(table.importBatchId)]);
 
 export const documentVersions = sqliteTable("document_versions", {
   id: text("id").primaryKey(), documentId: text("document_id").notNull(), versionNo: integer("version_no").notNull(),
@@ -72,6 +72,28 @@ export const approvals = sqliteTable("approvals", {
   submittedBy: text("submitted_by").notNull().default("项目管理员"), reviewer: text("reviewer"), comment: text("comment"),
   submittedAt: text("submitted_at").notNull().default(sql`CURRENT_TIMESTAMP`), reviewedAt: text("reviewed_at"),
 }, (table) => [index("approvals_status_idx").on(table.status), index("approvals_document_idx").on(table.documentId)]);
+
+// 资料集只用于给正式知识资料分组与追溯，原文、审核、分段与索引仍继续复用 documents 生命周期。
+export const knowledgeDatasets = sqliteTable("knowledge_datasets", {
+  id: text("id").primaryKey(), name: text("name").notNull(), createdByUserId: text("created_by_user_id").notNull(), createdBy: text("created_by").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`), updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [uniqueIndex("knowledge_datasets_name_unique").on(table.name)]);
+
+// 批次导入记录保存统一的管理员设置与汇总结果，不保存文件正文或 R2 存储键。
+export const knowledgeImportBatches = sqliteTable("knowledge_import_batches", {
+  id: text("id").primaryKey(), datasetId: text("dataset_id").notNull(), uploaderUserId: text("uploader_user_id").notNull(), uploader: text("uploader").notNull(),
+  documentType: text("document_type").notNull(), resourceCategory: text("resource_category").notNull(), securityLevel: text("security_level").notNull(), permissionScope: text("permission_scope").notNull(),
+  ownerDepartment: text("owner_department").notNull(), sourceOrganization: text("source_organization"), documentDate: text("document_date"), applicableScope: text("applicable_scope"), trialDataClass: text("trial_data_class").notNull(),
+  totalCount: integer("total_count").notNull().default(0), successCount: integer("success_count").notNull().default(0), failedCount: integer("failed_count").notNull().default(0), skippedCount: integer("skipped_count").notNull().default(0),
+  status: text("status").notNull().default("uploading"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`), completedAt: text("completed_at"),
+}, (table) => [index("knowledge_import_batches_dataset_idx").on(table.datasetId), index("knowledge_import_batches_uploader_idx").on(table.uploaderUserId), index("knowledge_import_batches_created_idx").on(table.createdAt)]);
+
+// 每个文件的结果单独持久化，让单个失败不影响整批且可以事后查看原因。
+export const knowledgeImportItems = sqliteTable("knowledge_import_items", {
+  id: text("id").primaryKey(), batchId: text("batch_id").notNull(), clientFileKey: text("client_file_key").notNull(), fileName: text("file_name").notNull(), fileSize: integer("file_size").notNull(), mimeType: text("mime_type"),
+  status: text("status").notNull(), reason: text("reason"), documentId: text("document_id"), versionId: text("version_id"), parseStatus: text("parse_status"), chunkCount: integer("chunk_count").notNull().default(0), indexStatus: text("index_status"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`), completedAt: text("completed_at"),
+}, (table) => [uniqueIndex("knowledge_import_item_batch_file_unique").on(table.batchId, table.clientFileKey), index("knowledge_import_items_batch_idx").on(table.batchId), index("knowledge_import_items_document_idx").on(table.documentId), index("knowledge_import_items_status_idx").on(table.status)]);
 
 export const policySources = sqliteTable("policy_sources", {
   id: text("id").primaryKey(), name: text("name").notNull(), agency: text("agency").notNull(), baseUrl: text("base_url").notNull(),

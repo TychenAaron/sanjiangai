@@ -560,6 +560,24 @@ button { cursor: pointer; }
 .user-list article > span:first-child b, .user-list article > span:first-child small { display: block; }
 .user-list article > span:first-child b { color: var(--ink); font-size: 8px; }
 .user-list article > span:first-child small { margin-top: 3px; color: var(--muted); font-size: 7px; }
+.batch-file-list { margin: 10px 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.batch-file-list > div { display: grid; grid-template-columns: minmax(0, 1fr) 120px auto; gap: 10px; align-items: center; padding: 9px 11px; border-bottom: 1px solid var(--line); font-size: 8px; }
+.batch-file-list > div:last-child { border-bottom: 0; }
+.batch-file-list b { overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
+.batch-file-list span { color: var(--muted); }
+.batch-status { justify-self: end; padding: 3px 7px; border-radius: 999px; background: #edf3f7; color: #536778; font-style: normal; }
+.batch-status.成功 { background: #e5f4ea; color: #2f7a4d; }
+.batch-status.失败 { background: #fff0ef; color: #a24b44; }
+.batch-status.跳过 { background: #fff6df; color: #8b6720; }
+.batch-status.上传中 { background: #e6f1fa; color: #35709f; }
+.import-batch-history { margin: 13px 0; padding: 14px 16px; }
+.import-batch-history > div { margin-bottom: 8px; }
+.import-batch-history > div strong, .import-batch-history > div span { display: block; }
+.import-batch-history > div strong { color: var(--navy); font-size: 10px; }
+.import-batch-history > div span { margin-top: 3px; color: var(--muted); font-size: 8px; }
+.import-batch-history article { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); font-size: 8px; }
+.import-batch-history article b { overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
+.import-batch-history article span { color: var(--muted); }
 
 @media (max-width: 960px) {
   .shell { grid-template-columns: 76px minmax(0,1fr); }
@@ -626,4 +644,8 @@ button { cursor: pointer; }
   .rule-form { grid-template-columns: 1fr; }
   .rule-list { overflow-x: auto; }
   .rule-list > div, .rule-list article { min-width: 700px; }
+  .batch-file-list > div { grid-template-columns: minmax(0, 1fr) auto; }
+  .batch-file-list span { display: none; }
+  .import-batch-history article { grid-template-columns: minmax(0, 1fr) auto; }
+  .import-batch-history article span { display: none; }
 }
