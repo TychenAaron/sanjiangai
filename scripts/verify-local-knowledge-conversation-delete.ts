@@ -43,6 +43,7 @@ async function main() {
 
   const first = await createConversation("VERIFY_DELETE_STAFF_FIRST", staffCookie);
   const second = await createConversation("VERIFY_DELETE_STAFF_SECOND", staffCookie);
+  const adminCleanup = await createConversation("VERIFY_DELETE_STAFF_ADMIN_CLEANUP", staffCookie);
   const firstDeleted = await fetch(`${baseUrl}/api/knowledge/conversations/${first}`, { method: "DELETE", headers: { cookie: staffCookie } });
   expect(firstDeleted.ok, "单条会话删除成功");
   const failed = await fetch(`${baseUrl}/api/knowledge/conversations/not-a-real-conversation`, { method: "DELETE", headers: { cookie: staffCookie } });
@@ -52,6 +53,9 @@ async function main() {
   const staffList = await fetch(`${baseUrl}/api/knowledge/conversations`, { headers: { cookie: staffCookie } });
   const staffPayload = await readPayload(staffList);
   expect(!staffPayload.conversations?.some((item) => item.id === first || item.id === second), "软删除会话不再出现于创建人列表");
+
+  const adminCleanupDeleted = await fetch(`${baseUrl}/api/knowledge/conversations/${adminCleanup}`, { method: "DELETE" });
+  expect(adminCleanupDeleted.ok, "系统管理员可清理其他账号的历史测试会话");
 
   const adminDeleted = await fetch(`${baseUrl}/api/knowledge/conversations/${adminConversation}`, { method: "DELETE" });
   expect(adminDeleted.ok, "创建人可清理自己的虚构会话");

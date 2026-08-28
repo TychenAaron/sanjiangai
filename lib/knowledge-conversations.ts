@@ -61,8 +61,8 @@ export async function readConversation(user: AccessUser, conversationId: string)
 
 export async function listConversations(user: AccessUser) {
   const db = getDb();
-  // 会话侧栏只展示创建人自己的会话；管理员审计与用户私有会话读取严格分离，避免页面出现无权删除的他人会话。
-  const scope = and(eq(knowledgeConversations.createdByUserId, user.id), isNull(knowledgeConversations.deletedAt));
+  // 普通用户仅看自己的会话；系统管理员仅在受控管理场景获取会话元数据，以便清理本机历史测试会话。
+  const scope = user.role === "system_admin" ? isNull(knowledgeConversations.deletedAt) : and(eq(knowledgeConversations.createdByUserId, user.id), isNull(knowledgeConversations.deletedAt));
   return db.select().from(knowledgeConversations).where(scope).orderBy(desc(knowledgeConversations.updatedAt)).limit(50);
 }
 
