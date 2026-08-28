@@ -11,6 +11,14 @@ interface Env {
   AI_GATEWAY_API_KEY?: string;
   AI_WRITING_MODEL?: string;
   AI_MODEL_TIMEOUT_MS?: string;
+  // Reranker 只由服务端 RAG 在权限过滤之后读取；浏览器和普通 API 响应不接触地址或密钥。
+  RERANKER_BASE_URL?: string;
+  RERANKER_API_KEY?: string;
+  RERANKER_MODEL?: string;
+  RERANKER_PATH?: string;
+  RERANKER_TIMEOUT_MS?: string;
+  RERANK_CANDIDATE_LIMIT?: string;
+  RERANK_TOP_K?: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {

@@ -3,7 +3,8 @@
 export const HYBRID_RETRIEVAL_DEFAULTS = {
   keywordTopK: 10,
   vectorTopK: 10,
-  fusionTopK: 8,
+  // 融合阶段保留较宽候选池，最终展示数量由 Top Evidence Selection 集中控制。
+  fusionTopK: 20,
   rrfK: 60,
 } as const;
 

@@ -27,6 +27,7 @@
     "verify:knowledge-conversations": "node --experimental-strip-types scripts/verify-knowledge-conversations.ts",
     "verify:permission-scoped-vector-retrieval": "node --experimental-strip-types scripts/verify-permission-scoped-vector-retrieval.ts",
     "verify:hybrid-knowledge-retrieval": "node --experimental-strip-types scripts/verify-hybrid-knowledge-retrieval.ts",
+    "verify:reranked-knowledge-evidence": "node --experimental-strip-types scripts/verify-reranked-knowledge-evidence.ts",
     "verify:local:writing": "node --experimental-strip-types scripts/verify-local-writing.ts",
     "verify:local:writing-export": "node --experimental-strip-types scripts/verify-local-writing-export.ts",
     "verify:writing-structured": "node --experimental-strip-types scripts/verify-writing-structured.ts",

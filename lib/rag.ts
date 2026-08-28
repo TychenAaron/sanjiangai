@@ -13,6 +13,8 @@ import {
 import { embedTexts, readEmbeddingGatewayConfig } from "./embedding-gateway";
 import { DevD1VectorStore, type VectorStore } from "./vector-store";
 import { fuseRankedEvidence, HYBRID_RETRIEVAL_DEFAULTS, type FusedEvidence } from "./hybrid-fusion";
+import { readEvidenceSelectionConfig, selectTopEvidence } from "./evidence-selection";
+import { readRerankerGatewayConfig, rerankCandidates } from "./reranker-gateway";
 
 // 完整标准化问题命中时会额外获得 12 分，因此默认可靠依据门槛也使用 12 分。
 // 这要求候选资料至少包含完整提问，或累积足够多个关键词命中，避免单个弱关键词触发回答。
@@ -43,6 +45,7 @@ type AuthorizedChunkRow = {
 
 export type VectorKnowledgeEvidence = KnowledgeCitation & { chunkId: string };
 export type HybridKnowledgeEvidence = FusedEvidence<VectorKnowledgeEvidence>;
+export type RerankedKnowledgeEvidence = HybridKnowledgeEvidence & { rerankScore?: number; rerankRank?: number };
 
 // 判断资料是否满足正式 evidence 门槛。输入是已从 D1 读取的资料元数据，输出不涉及正文或模型调用。
 export function isFormalEvidenceDocument(document: typeof documents.$inferSelect, versionNo: number, versionStatus: string) {
@@ -199,6 +202,55 @@ export async function retrieveAuthorizedHybrid(
   });
   if (!evidence.length) return { status: "no_evidence", vectorStatus: vector.status, evidence };
   return { status: vector.status === "success" ? "hybrid" : "keyword_only", vectorStatus: vector.status, evidence };
+}
+
+// 对已授权且已融合去重的 Hybrid 候选执行可选重排，并选择最终引用证据。失败仅按 RRF 顺序降级，绝不扩大候选范围或伪造分数。
+export async function retrieveAuthorizedRerankedHybrid(
+  user: AccessUser,
+  query: string,
+): Promise<{
+  retrievalStatus: "hybrid" | "keyword_only" | "no_evidence";
+  vectorStatus: "success" | "no_scope" | "not_configured" | "timeout" | "gateway_error" | "invalid_response";
+  rerankerStatus: "success" | "no_candidates" | "not_configured" | "timeout" | "gateway_error" | "invalid_response";
+  rerankerUsed: boolean;
+  evidence: RerankedKnowledgeEvidence[];
+}> {
+  const runtime = env as unknown as Record<string, string | undefined>;
+  const selectionConfig = readEvidenceSelectionConfig(runtime);
+  // Hybrid 内部先完成权限 scope；这里只接收其输出，禁止额外从全库补充候选。
+  const hybrid = await retrieveAuthorizedHybrid(user, query, { fusionTopK: selectionConfig.candidateLimit });
+  const candidates = hybrid.evidence.slice(0, selectionConfig.candidateLimit);
+  if (!candidates.length) {
+    return { retrievalStatus: hybrid.status, vectorStatus: hybrid.vectorStatus, rerankerStatus: "no_candidates", rerankerUsed: false, evidence: [] };
+  }
+
+  const reranker = await rerankCandidates(
+    readRerankerGatewayConfig(runtime),
+    query,
+    candidates.map((candidate) => ({ text: candidate.excerpt })),
+  );
+  if (reranker.status !== "success") {
+    return {
+      retrievalStatus: hybrid.status,
+      vectorStatus: hybrid.vectorStatus,
+      rerankerStatus: reranker.status,
+      rerankerUsed: false,
+      evidence: selectTopEvidence(candidates, { topK: selectionConfig.topK, rerankerUsed: false }),
+    };
+  }
+
+  const scores = new Map(reranker.scores.map((item) => [item.index, item.score]));
+  const ranked = candidates
+    .map((candidate, index) => ({ ...candidate, rerankScore: scores.get(index)! }))
+    .sort((left, right) => right.rerankScore - left.rerankScore || right.fusionScore - left.fusionScore || left.chunkId.localeCompare(right.chunkId))
+    .map((candidate, index) => ({ ...candidate, rerankRank: index + 1 }));
+  return {
+    retrievalStatus: hybrid.status,
+    vectorStatus: hybrid.vectorStatus,
+    rerankerStatus: "success",
+    rerankerUsed: true,
+    evidence: selectTopEvidence(ranked, { topK: selectionConfig.topK, rerankerUsed: true }),
+  };
 }
 
 
