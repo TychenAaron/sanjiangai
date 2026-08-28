@@ -322,7 +322,7 @@ function Knowledge({ query, setQuery, lastQuestion, result, asking, phase, error
   return <section className="page knowledge-workspace">
     <PageTitle kicker="知识中枢" title="知识会话" text="通过RAG只依据员工有权查看的正式资料回答，并显示来源、版本和原文片段。"/>
     <div className="retrieval-status"><span><i/>账号权限过滤已启用</span><span><i/>引用溯源已启用</span><span className="waiting"><i/>Qwen3.8-27B等待私有模型网关</span></div>
-    <div className="conversation-list panel"><button onClick={() => void createConversation()}>＋ 新建会话</button>{conversations.map(item => <div key={item.id} className={conversationId === item.id ? "active" : ""}><button onClick={() => setConversationId(item.id)} title={item.title}>{item.title}</button><small>{formatDate(item.updatedAt)}</small><button aria-label="删除会话" onClick={() => void deleteConversation(item.id)}>×</button></div>)}</div>
+    <div className="knowledge-chat-layout"><aside className="conversation-sidebar panel"><button className="new-conversation" onClick={() => void createConversation()}>＋ 新建会话</button><div className="conversation-list">{conversations.map(item => <div key={item.id} className={conversationId === item.id ? "active" : ""}><button onClick={() => setConversationId(item.id)} title={item.title}>{item.title}</button><small>{formatDate(item.updatedAt)}</small><button aria-label="删除会话" onClick={() => void deleteConversation(item.id)}>×</button></div>)}</div></aside>
     <div className="chat-panel">
       <div className="knowledge-mode"><button className={mode === "answer" ? "active" : ""} onClick={() => setMode("answer")}>智能问答</button><button className={mode === "search" ? "active" : ""} onClick={() => setMode("search")}>资料检索</button></div>
       {!lastQuestion && !asking && history.length === 0 ? <div className="empty"><i><Icon name="chat" size={30}/></i><h2>您想查询什么？</h2><p>请先上传并审核一份脱敏资料。系统会先核验账号权限，再检索正式知识。</p></div> :
@@ -335,7 +335,7 @@ function Knowledge({ query, setQuery, lastQuestion, result, asking, phase, error
       </div>}
       {mode === "search" && <div className="search-results">{searchResults.length === 0 ? <p>输入关键词后，仅检索您有权访问的正式资料。</p> : searchResults.map((item, index) => <article className="citation" key={`${item.title}-${index}`}><strong>《{item.title}》 · {item.category}</strong><small>{item.sourceOrganization || "来源单位待补充"} · {item.documentDate || "日期待补充"} · {item.location}</small><p>{item.excerpt}</p></article>)}</div>}
       <form className="chat-input" onSubmit={mode === "answer" ? ask : search}><input value={query} onChange={e => setQuery(e.target.value)} placeholder={mode === "answer" ? "输入问题，按回车发送" : "输入关键词，检索正式资料"}/><button aria-label="发送" disabled={asking || searching}><Icon name="send"/></button></form>
-    </div>
+    </div></div>
   </section>;
 }
 
