@@ -59,6 +59,8 @@ const answer = await callModelGateway(modelConfig, "虚构库存盘点如何复�
 assert.equal(answer.status, "success");
 assert.ok(modelBody.includes(allowedVector[0].excerpt), "最终 Top Evidence 必须进入 grounded LLM context");
 assert.ok(!modelBody.includes(allowedKeyword[0].excerpt) && !modelBody.includes(forbiddenEvidence.excerpt), "unauthorized evidence reaches LLM context = NO，且非 Top Evidence 不得进入上下文");
+const tolerantAnswer = await callModelGateway(modelConfig, "虚构格式兼容问题", topCitations, async () => Response.json({ choices: [{ message: { content: "本机虚构模型返回的连续正文。" } }] }));
+assert.equal(tolerantAnswer.status, "success", "非空连续正文不应因未带模型编号而被误判为网关失败");
 
 // CASE 6：Embedding 故障时，空向量分支仍能以关键词候选形成最终 evidence 并供 grounded answer 使用。
 const keywordFallback = fuseRankedEvidence(allowedKeyword, [], { fusionTopK: 20, rrfK: 60 });

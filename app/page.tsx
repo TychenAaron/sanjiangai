@@ -16,6 +16,7 @@ type DocumentSummary = { total: number; pending: number; approved: number; draft
 type AuditLog = { id: string; action: string; operator: string; detail: string; createdAt: string };
 type BlockedTerm = { id: string; term: string; category: string; matchScope: string; note: string | null; enabled: boolean; createdBy: string; createdAt: string; updatedAt: string };
 type DocumentVersion = { id: string; versionNo: number; content: string; changeSummary: string; versionStatus: string; createdBy: string; createdAt: string };
+type BatchUploadSummary = { total: number; succeeded: number; failed: Array<{ fileName: string; reason: string }> };
 type SessionUser = { id: string; name: string; email: string; employeeNo: string | null; departmentName: string; role: string; positionLevel: number; clearanceLevel: number; status: string };
 type KnowledgeResult = {
   answer: string;
@@ -695,7 +696,8 @@ function formatDate(value: string) {
 function Library({ user, records, loading, error, refresh }: { user: SessionUser | null; records: DocumentRecord[]; loading: boolean; error: string; refresh: () => Promise<void> }) {
   const [adding, setAdding] = useState(false);
   const [ingestMode, setIngestMode] = useState<"file" | "text">("file");
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [batchUploadSummary, setBatchUploadSummary] = useState<BatchUploadSummary | null>(null);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
   const [selected, setSelected] = useState<DocumentRecord | null>(null);
@@ -764,22 +766,34 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
   }
 
   async function saveUpload() {
-    if (!uploadFile) { setNotice("请先选择一个脱敏文件。"); return; }
-    if (!form.title.trim()) { setNotice("请填写文件名称。"); return; }
+    if (!uploadFiles.length) { setNotice("请先选择脱敏文件。"); return; }
+    if (uploadFiles.length === 1 && !form.title.trim()) { setNotice("请填写文件名称。"); return; }
     if (!form.confirmedDesensitized) { setNotice("请先勾选脱敏确认。"); return; }
     setSaving(true); setNotice("");
+    const failed: BatchUploadSummary["failed"] = [];
+    let succeeded = 0;
     try {
-      const payload = new FormData();
-      payload.set("file", uploadFile); payload.set("title", form.title); payload.set("documentType", form.documentType);
-      payload.set("ownerDepartment", form.ownerDepartment); payload.set("securityLevel", form.securityLevel);
-      payload.set("permissionScope", form.permissionScope); payload.set("trialDataClass", form.trialDataClass); payload.set("confirmedDesensitized", "true");
-      payload.set("resourceCategory", form.resourceCategory); payload.set("sourceOrganization", form.sourceOrganization);
-      payload.set("documentDate", form.documentDate); payload.set("applicableScope", form.applicableScope);
-      const response = await fetch("/api/documents/upload", { method: "POST", body: payload });
-      const result = await response.json() as { error?: string; chunkCount?: number };
-      if (!response.ok) throw new Error(result.error || "上传失败");
-      setUploadFile(null); setForm({ ...form, title: "", content: "", confirmedDesensitized: false }); setAdding(false);
-      setNotice(`文件已经保存并解析为${result.chunkCount || 0}个检索片段，审核通过后即可用于知识问答。`);
+      // 每份文件仍单独走既有服务端安全链：格式/大小、禁止词、R2 回滚、D1 版本与待审核状态互不影响。
+      for (const file of uploadFiles) {
+        const extension = file.name.split(".").pop()?.toLowerCase() || "";
+        if (!new Set(["docx", "pdf", "txt", "md", "xlsx", "xls", "pptx", "ppt"]).has(extension)) { failed.push({ fileName: file.name, reason: "不支持的文件类型" }); continue; }
+        if (file.size <= 0 || file.size > 8 * 1024 * 1024) { failed.push({ fileName: file.name, reason: "文件为空或超过 8MB 限制" }); continue; }
+        const payload = new FormData();
+        payload.set("file", file); payload.set("title", uploadFiles.length === 1 ? form.title : file.name.replace(/\.[^.]+$/, "")); payload.set("documentType", form.documentType);
+        payload.set("ownerDepartment", form.ownerDepartment); payload.set("securityLevel", form.securityLevel);
+        payload.set("permissionScope", form.permissionScope); payload.set("trialDataClass", form.trialDataClass); payload.set("confirmedDesensitized", "true");
+        payload.set("resourceCategory", form.resourceCategory); payload.set("sourceOrganization", form.sourceOrganization);
+        payload.set("documentDate", form.documentDate); payload.set("applicableScope", form.applicableScope);
+        try {
+          const response = await fetch("/api/documents/upload", { method: "POST", body: payload });
+          const result = await response.json() as { error?: string };
+          if (!response.ok) { failed.push({ fileName: file.name, reason: result.error || "上传失败" }); continue; }
+          succeeded += 1;
+        } catch { failed.push({ fileName: file.name, reason: "网络请求失败" }); }
+      }
+      setBatchUploadSummary({ total: uploadFiles.length, succeeded, failed });
+      setUploadFiles([]); setForm({ ...form, title: "", content: "", confirmedDesensitized: false });
+      setNotice(`本批共处理 ${uploadFiles.length} 份：成功 ${succeeded} 份，失败 ${failed.length} 份。所有成功文件均已提交正式资料审核。`);
       await refresh();
     } catch (error) { setNotice(error instanceof Error ? error.message : "上传失败"); }
     finally { setSaving(false); }
@@ -815,7 +829,7 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
     {adding && <div className="panel ingest-form">
       <div className="trial-rule"><Icon name="shield" size={18}/><div><strong>当前为试用数据入口</strong><span>只允许公开资料、内部脱敏测试资料和部门隔离测试资料；真实敏感资料与禁止项不得上传。</span></div></div>
       <div className="ingest-mode"><button className={ingestMode === "file" ? "active" : ""} onClick={() => setIngestMode("file")}>上传文件</button><button className={ingestMode === "text" ? "active" : ""} onClick={() => setIngestMode("text")}>粘贴正文</button><span>{ingestMode === "file" ? "支持 DOCX、PDF、TXT、MD、XLSX、XLS、PPTX、PPT；XLS/PPT 可安全保存并按状态继续处理。" : "适合快速粘贴一小段脱敏制度进行测试。"}</span></div>
-      {ingestMode === "file" && <label className="file-drop"><input type="file" accept=".docx,.pdf,.txt,.md,.xlsx,.xls,.pptx,.ppt" onChange={event => { const file = event.target.files?.[0] || null; setUploadFile(file); if (file && !form.title) setField("title", file.name.replace(/\.[^.]+$/, "")); }}/><Icon name="folder" size={24}/><span><strong>{uploadFile ? uploadFile.name : "选择脱敏文件"}</strong><small>{uploadFile ? `${(uploadFile.size / 1024).toFixed(1)} KB` : "单个文件不超过8MB"}</small></span></label>}
+      {ingestMode === "file" && <><label className="file-drop"><input type="file" multiple accept=".docx,.pdf,.txt,.md,.xlsx,.xls,.pptx,.ppt" onChange={event => { const files = [...(event.target.files || [])]; const unique = files.filter((file, index) => files.findIndex(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified) === index); setUploadFiles(unique); setBatchUploadSummary(null); if (unique.length === 1 && !form.title) setField("title", unique[0].name.replace(/\.[^.]+$/, "")); }}/><Icon name="folder" size={24}/><span><strong>{uploadFiles.length ? `已选择 ${uploadFiles.length} 份文件` : "选择脱敏文件"}</strong><small>{uploadFiles.length === 1 ? `${uploadFiles[0].name} · ${(uploadFiles[0].size / 1024).toFixed(1)} KB` : "可一次选择多份文件；单个文件不超过 8MB"}</small></span></label>{batchUploadSummary && <div className="notice"><strong>本批处理结果：</strong>共 {batchUploadSummary.total} 份，成功 {batchUploadSummary.succeeded} 份，失败 {batchUploadSummary.failed.length} 份。{batchUploadSummary.failed.length > 0 && <ul>{batchUploadSummary.failed.slice(0, 10).map(item => <li key={`${item.fileName}-${item.reason}`}>{item.fileName}：{item.reason}</li>)}{batchUploadSummary.failed.length > 10 && <li>其余 {batchUploadSummary.failed.length - 10} 份失败文件请查看本次选择后重新处理。</li>}</ul>}</div>}</>}
       <div className="form-grid">
         <label><span>文件名称 *</span><input value={form.title} onChange={e => setField("title", e.target.value)} placeholder="例如：集团采购管理办法（试行）"/></label>
         <label><span>试用数据类别 *</span><select value={form.trialDataClass} onChange={e => { const value = e.target.value; setField("trialDataClass", value); if (value === "T1-公开资料") { setField("securityLevel", "公开"); setField("permissionScope", "公司全员"); } if (value === "T3-部门隔离测试") setField("permissionScope", "责任部门"); }}><option>T1-公开资料</option><option>T2-内部脱敏测试</option><option>T3-部门隔离测试</option></select></label>

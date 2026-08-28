@@ -24,7 +24,7 @@ export type GatewayFetch = (input: RequestInfo | URL, init?: RequestInit) => Pro
 
 export type ModelGatewayResult =
   | { status: "success"; answer: string }
-  | { status: "not_configured" | "timeout" | "gateway_error" | "invalid_response" | "invalid_citation" };
+  | { status: "not_configured" | "timeout" | "gateway_error" | "invalid_response" };
 
 export type GroundedAnswerResult = {
   answer: string;
@@ -34,7 +34,8 @@ export type GroundedAnswerResult = {
 
 const DEFAULT_MODEL = "Qwen3.8-27B";
 const DEFAULT_TIMEOUT_MS = 8_000;
-const MAX_TIMEOUT_MS = 30_000;
+// 本机 Qwen3 在保留 reasoning_content 时可能需要超过 30 秒；上限与写作网关一致，仍由服务端变量控制。
+const MAX_TIMEOUT_MS = 120_000;
 const MAX_MODEL_TOKENS = 1_000;
 
 // 说明：读取模型网关配置，输入为 Worker 安全环境变量，输出为不含密钥的运行配置状态。
@@ -77,13 +78,6 @@ export function buildGroundedMessages(query: string, citations: ModelGatewayCita
   ];
 }
 
-// 说明：校验模型输出引用，输入是模型文本与本次 citations 数量，输出是文本是否可安全展示。
-// 非空回答必须至少有一个 [N] 引用，且所有编号都必须落在本次真实引用范围内；不伪造或修补模型引用。
-export function hasValidCitations(answer: string, citationCount: number) {
-  const references = [...answer.matchAll(/\[(\d+)\]/g)].map((match) => Number(match[1]));
-  return references.length > 0 && references.every((reference) => reference >= 1 && reference <= citationCount);
-}
-
 // 说明：调用 OpenAI 兼容 /chat/completions 网关，输入是已裁剪资料与可替换 fetch，输出是安全分类结果。
 // 通过 AbortController 控制超时；非 2xx、无效 JSON、空回答和异常均返回分类结果，不暴露地址、密钥或底层错误细节。
 export async function callModelGateway(
@@ -122,7 +116,8 @@ export async function callModelGateway(
     }
     const answer = typeof data.choices?.[0]?.message?.content === "string" ? data.choices[0].message.content.trim() : "";
     if (!answer) return { status: "invalid_response" };
-    if (!hasValidCitations(answer, citations.length)) return { status: "invalid_citation" };
+    // 正式 citations 始终由已完成权限过滤的 Top Evidence 在服务端生成；本地模型只要返回非空正文即可展示，
+    // 不因其未重复输出 [N] 标记而丢弃真实回答，避免把格式偏好误作模型调用失败。
     return { status: "success", answer };
   } catch (error) {
     return { status: error instanceof DOMException && error.name === "AbortError" ? "timeout" : "gateway_error" };
@@ -132,7 +127,7 @@ export async function callModelGateway(
 }
 
 // 说明：根据已授权 citations 决定最终模式，输入是可靠引用、网关配置和可替换 fetch，输出是安全问答结果。
-// 没有可靠引用时绝不触发网关；网关失败、超时或引用不合格时只返回真实引用的原文摘录，不展示不合格模型文本。
+// 没有可靠引用时绝不触发网关；网关失败或超时时只返回真实引用的原文摘录，不展示失败模型文本。
 export async function resolveGroundedAnswer(
   query: string,
   citations: ModelGatewayCitation[],

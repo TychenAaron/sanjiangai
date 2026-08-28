@@ -18,6 +18,7 @@
     "db:seed:local:test-documents": "wrangler d1 execute DB --local --config wrangler.local.toml --file scripts/local-seed-test-documents.sql",
     "verify:local:test-access": "node --experimental-strip-types scripts/verify-local-test-access.ts",
     "verify:local:upload-flow": "node --experimental-strip-types scripts/verify-local-upload-flow.ts",
+    "verify:local:batch-upload": "node --experimental-strip-types scripts/verify-local-batch-upload.ts",
     "verify:local:knowledge-reliability": "node --experimental-strip-types scripts/verify-local-knowledge-reliability.ts",
     "verify:formal-knowledge-lifecycle": "node --experimental-strip-types scripts/verify-formal-knowledge-lifecycle.ts",
     "verify:local:model-gateway": "node --experimental-strip-types scripts/verify-local-model-gateway.ts",

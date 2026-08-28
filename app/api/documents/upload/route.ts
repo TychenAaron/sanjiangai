@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { approvals, auditLogs, documents, documentVersions } from "../../../../db/schema";
 import { accessError, canUploadDocument, requireAccessUser } from "../../../../lib/access";
@@ -43,7 +43,11 @@ export async function POST(request: Request) {
       return Response.json({ error: "当前账号无权上传该数据级别或责任部门的资料" }, { status: 403 });
     }
 
-    const { buffer, content, parseStatus, parseReason } = await extractUpload(file);
+    // 格式、大小、伪造扩展名和空解析均在 R2/D1 写入前明确拒绝，不能落入通用 500 而误导批量汇总。
+    let extracted: Awaited<ReturnType<typeof extractUpload>>;
+    try { extracted = await extractUpload(file); }
+    catch (error) { return Response.json({ error: error instanceof Error ? error.message : "文件预检失败" }, { status: 400 }); }
+    const { buffer, content, parseStatus, parseReason } = extracted;
     const title = String(form.get("title") || file.name.replace(/\.[^.]+$/, "")).trim();
     if (!title) return Response.json({ error: "请填写文件名称" }, { status: 400 });
     const db = getDb();
@@ -56,6 +60,11 @@ export async function POST(request: Request) {
       });
       return Response.json({ error: `文件命中后台禁止上传规则（${[...new Set(blocked.map(item => item.category))].join("、")}），原文件未保存，请联系管理员。` }, { status: 400 });
     }
+    // 批量导入会逐文件请求本接口；同名且同大小的既有原文件视为明显重复，拒绝在写入 R2/D1 前再次入库。
+    // 这不是内容相似度判断，不会把名称相同但大小不同的后续版本静默覆盖。
+    const [duplicate] = await db.select({ id: documents.id }).from(documents)
+      .where(and(eq(documents.sourceRef, file.name), eq(documents.fileSize, file.size))).limit(1);
+    if (duplicate) return Response.json({ error: "发现同名且同大小的已入库文件，已跳过重复上传。" }, { status: 409 });
     const runtime = env as unknown as { BUCKET?: Bucket };
     bucket = runtime.BUCKET;
     if (!bucket) throw new Error("文件存储尚未启用");
