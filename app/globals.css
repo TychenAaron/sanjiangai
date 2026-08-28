@@ -148,7 +148,14 @@ button { cursor: pointer; }
 .retrieval-status span.waiting i { background: #cf9d3d; }
 .knowledge-chat-layout { display: grid; grid-template-columns: 248px minmax(0, 1fr); gap: 14px; min-height: min(680px, calc(100vh - 240px)); }
 .conversation-sidebar { display: flex; min-height: 0; flex-direction: column; padding: 10px; }
+.conversation-sidebar-actions { flex: 0 0 auto; }
 .new-conversation { flex: 0 0 auto; width: 100%; padding: 10px 11px; border: 1px dashed #b7c7d5; border-radius: 7px; background: #f7fafc; color: var(--navy); font-size: 8px; font-weight: 700; text-align: left; }
+.conversation-bulk-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; align-items: center; margin-top: 9px; color: var(--muted); font-size: 7px; }
+.conversation-bulk-actions label { display: flex; min-width: 0; align-items: center; gap: 4px; white-space: nowrap; }
+.conversation-bulk-actions input, .conversation-list > div > input { accent-color: var(--green); }
+.conversation-bulk-actions button { grid-column: 1 / -1; padding: 6px 8px; border: 1px solid #ead3d0; border-radius: 6px; background: #fff8f7; color: #9d4c42; font-size: 7px; font-weight: 700; }
+.conversation-bulk-actions button:disabled { cursor: not-allowed; opacity: .55; }
+.conversation-notice { margin: 8px 0 0; color: #795b29; font-size: 7px; line-height: 1.5; }
 .chat-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 23px; border: 1px solid var(--line); border-radius: 12px; background: white; }
 .empty { margin: auto; text-align: center; }
 .empty > i { display: grid; place-items: center; width: 64px; height: 64px; margin: auto; border-radius: 17px; background: #e8f2ee; color: var(--green); font-style: normal; }
@@ -156,13 +163,14 @@ button { cursor: pointer; }
 .empty p { color: var(--muted); font-size: 10px; }
 .conversation { flex: 1; }
 .conversation-list { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 6px; margin-top: 10px; overflow-y: auto; padding-right: 2px; }
-.conversation-list > div { display: grid; flex: 0 0 auto; grid-template-columns: minmax(0, 1fr) auto 25px; gap: 8px; align-items: center; min-height: 42px; padding: 8px 9px; border: 1px solid transparent; border-radius: 7px; background: #fff; }
+.conversation-list > div { display: grid; flex: 0 0 auto; grid-template-columns: 15px minmax(0, 1fr) auto 25px; gap: 7px; align-items: center; min-height: 42px; padding: 8px 9px; border: 1px solid transparent; border-radius: 7px; background: #fff; }
 .conversation-list > div:hover { background: #f6f9fb; }
 .conversation-list > div.active { border-color: #b9d5c6; background: #eff8f3; }
-.conversation-list > div > button:first-child { overflow: hidden; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 8px; font-weight: 700; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-select { overflow: hidden; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 8px; font-weight: 700; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .conversation-list > div small { color: var(--muted); font-size: 7px; white-space: nowrap; }
-.conversation-list > div > button:last-child { width: 25px; height: 25px; border: 1px solid #e1e7ed; border-radius: 50%; background: white; color: #a45249; font-size: 13px; line-height: 1; }
-.conversation-list > div > button:last-child:hover { border-color: #c96c62; background: #fff2f0; }
+.conversation-delete { width: 25px; height: 25px; border: 1px solid #e1e7ed; border-radius: 50%; background: white; color: #a45249; font-size: 13px; line-height: 1; }
+.conversation-delete:hover { border-color: #c96c62; background: #fff2f0; }
+.conversation-delete:disabled { cursor: not-allowed; opacity: .55; }
 .question { width: fit-content; max-width: 72%; margin-left: auto; padding: 11px 14px; border-radius: 12px 12px 3px 12px; background: var(--navy); color: white; font-size: 11px; }
 .answer { display: flex; gap: 11px; width: min(760px,90%); margin-top: 23px; }
 .answer p { margin: 0 0 9px; color: #405062; font-size: 11px; line-height: 1.8; }

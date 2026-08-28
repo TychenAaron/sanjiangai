@@ -302,9 +302,45 @@ function Knowledge({ query, setQuery, lastQuestion, result, asking, phase, error
   const [searchResults, setSearchResults] = useState<Array<{ title: string; category: string; sourceOrganization: string | null; documentDate: string | null; location: string; excerpt: string }>>([]);
   const [searching, setSearching] = useState(false);
   const [history, setHistory] = useState<ConversationMessage[]>([]);
+  const [selectedConversationIds, setSelectedConversationIds] = useState<string[]>([]);
+  const [conversationNotice, setConversationNotice] = useState("");
+  const [deletingConversationIds, setDeletingConversationIds] = useState<string[]>([]);
   useEffect(() => { if (!conversationId) return; void (async () => { const response = await fetch(`/api/knowledge/conversations/${conversationId}`, { cache: "no-store" }); const data = await response.json() as { messages?: ConversationMessage[] }; if (response.ok) setHistory(data.messages || []); })(); }, [conversationId]);
   async function createConversation() { const response = await fetch("/api/knowledge/conversations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: "新建会话" }) }); const data = await response.json() as { conversation?: ConversationSummary }; if (response.ok && data.conversation) { setConversationId(data.conversation.id); setHistory([]); setQuery(""); setSearchResults([]); await refreshConversations(); } }
-  async function deleteConversation(id: string) { if (!window.confirm("确认删除此会话？")) return; const response = await fetch(`/api/knowledge/conversations/${id}`, { method: "DELETE" }); if (response.ok) { if (conversationId === id) { setConversationId(null); setHistory([]); } await refreshConversations(); } }
+  /** 逐条软删除当前账号的会话。输入会话 ID，输出成功与失败汇总；每一项独立调用服务端权限控制，不因单项失败隐藏其他成功结果。 */
+  async function deleteConversations(ids: string[]) {
+    if (ids.length === 0) return;
+    setDeletingConversationIds(ids);
+    setConversationNotice("");
+    const deletedIds: string[] = [];
+    const failures: string[] = [];
+    for (const id of ids) {
+      try {
+        const response = await fetch(`/api/knowledge/conversations/${id}`, { method: "DELETE" });
+        const data = await response.json() as { error?: string };
+        if (response.ok) deletedIds.push(id);
+        else failures.push(data.error || "会话删除失败");
+      } catch {
+        failures.push("网络异常，会话未删除");
+      }
+    }
+    if (deletedIds.includes(conversationId || "")) {
+      setConversationId(null);
+      setHistory([]);
+      setQuery("");
+      setSearchResults([]);
+    }
+    setSelectedConversationIds((current) => current.filter((id) => !deletedIds.includes(id)));
+    setDeletingConversationIds([]);
+    setConversationNotice(failures.length > 0
+      ? `已删除 ${deletedIds.length} 条，${failures.length} 条失败：${failures[0]}`
+      : `已删除 ${deletedIds.length} 条会话`);
+    await refreshConversations();
+  }
+  /** 单条删除在二次确认后复用同一汇总流程，服务端拒绝时在左侧栏显示真实原因。 */
+  async function deleteConversation(id: string) { if (!window.confirm("确认删除此会话？")) return; await deleteConversations([id]); }
+  /** 批量删除需要两次确认，以避免误操作。 */
+  async function deleteSelectedConversations() { if (selectedConversationIds.length === 0) return; if (!window.confirm(`将删除 ${selectedConversationIds.length} 条已选会话，是否继续？`) || !window.confirm("请再次确认：已选会话将从您的历史列表中删除。")) return; await deleteConversations(selectedConversationIds); }
   async function search(event: FormEvent) { event.preventDefault(); const value = query.trim(); if (!value || searching) return; setSearching(true); try { const response = await fetch("/api/knowledge/search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: value, conversationId: conversationId || undefined }) }); const data = await response.json() as { results?: typeof searchResults; conversationId?: string; error?: string }; if (!response.ok) throw new Error(data.error || "资料检索失败"); setSearchResults(data.results || []); if (data.conversationId) setConversationId(data.conversationId); await refreshConversations(); } finally { setSearching(false); } }
   // 点击引用后重新请求服务端；服务端会再次校验当前资料状态和当前用户权限，不复用旧页面数据。
   async function openCitation(citation: KnowledgeResult["citations"][number]) {
@@ -322,7 +358,7 @@ function Knowledge({ query, setQuery, lastQuestion, result, asking, phase, error
   return <section className="page knowledge-workspace">
     <PageTitle kicker="知识中枢" title="知识会话" text="通过RAG只依据员工有权查看的正式资料回答，并显示来源、版本和原文片段。"/>
     <div className="retrieval-status"><span><i/>账号权限过滤已启用</span><span><i/>引用溯源已启用</span><span className="waiting"><i/>Qwen3.8-27B等待私有模型网关</span></div>
-    <div className="knowledge-chat-layout"><aside className="conversation-sidebar panel"><button className="new-conversation" onClick={() => void createConversation()}>＋ 新建会话</button><div className="conversation-list">{conversations.map(item => <div key={item.id} className={conversationId === item.id ? "active" : ""}><button onClick={() => setConversationId(item.id)} title={item.title}>{item.title}</button><small>{formatDate(item.updatedAt)}</small><button aria-label="删除会话" onClick={() => void deleteConversation(item.id)}>×</button></div>)}</div></aside>
+    <div className="knowledge-chat-layout"><aside className="conversation-sidebar panel"><div className="conversation-sidebar-actions"><button className="new-conversation" onClick={() => void createConversation()}>＋ 新建会话</button><div className="conversation-bulk-actions"><label><input type="checkbox" checked={conversations.length > 0 && selectedConversationIds.length === conversations.length} onChange={(event) => setSelectedConversationIds(event.target.checked ? conversations.map((item) => item.id) : [])}/> 全选当前列表</label><span>已选 {selectedConversationIds.length} 条</span><button onClick={() => void deleteSelectedConversations()} disabled={selectedConversationIds.length === 0 || deletingConversationIds.length > 0}>批量删除</button></div>{conversationNotice && <p className="conversation-notice" role="status">{conversationNotice}</p>}</div><div className="conversation-list">{conversations.map(item => <div key={item.id} className={conversationId === item.id ? "active" : ""}><input aria-label={`选择会话 ${item.title}`} type="checkbox" checked={selectedConversationIds.includes(item.id)} onChange={(event) => setSelectedConversationIds((current) => event.target.checked ? [...new Set([...current, item.id])] : current.filter((id) => id !== item.id))}/><button className="conversation-select" onClick={() => setConversationId(item.id)} title={item.title}>{item.title}</button><small>{formatDate(item.updatedAt)}</small><button className="conversation-delete" aria-label="删除会话" disabled={deletingConversationIds.includes(item.id)} onClick={() => void deleteConversation(item.id)}>×</button></div>)}</div></aside>
     <div className="chat-panel">
       <div className="knowledge-mode"><button className={mode === "answer" ? "active" : ""} onClick={() => setMode("answer")}>智能问答</button><button className={mode === "search" ? "active" : ""} onClick={() => setMode("search")}>资料检索</button></div>
       {!lastQuestion && !asking && history.length === 0 ? <div className="empty"><i><Icon name="chat" size={30}/></i><h2>您想查询什么？</h2><p>请先上传并审核一份脱敏资料。系统会先核验账号权限，再检索正式知识。</p></div> :

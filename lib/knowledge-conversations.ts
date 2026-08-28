@@ -61,7 +61,8 @@ export async function readConversation(user: AccessUser, conversationId: string)
 
 export async function listConversations(user: AccessUser) {
   const db = getDb();
-  const scope = user.role === "system_admin" ? isNull(knowledgeConversations.deletedAt) : and(eq(knowledgeConversations.createdByUserId, user.id), isNull(knowledgeConversations.deletedAt));
+  // 会话侧栏只展示创建人自己的会话；管理员审计与用户私有会话读取严格分离，避免页面出现无权删除的他人会话。
+  const scope = and(eq(knowledgeConversations.createdByUserId, user.id), isNull(knowledgeConversations.deletedAt));
   return db.select().from(knowledgeConversations).where(scope).orderBy(desc(knowledgeConversations.updatedAt)).limit(50);
 }
 
