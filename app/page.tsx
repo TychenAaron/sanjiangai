@@ -83,6 +83,14 @@ const nav: { label: View; icon: IconName }[] = [
   { label: "知识资源", icon: "folder" },
 ];
 
+type PolicySourceRecord = { id: string; name: string; agency: string; status: string };
+type PolicyCandidateRecord = {
+  id: string; policySourceId: string; title: string; documentNumber: string | null; issuingBody: string | null;
+  publishDate: string | null; status: string; reviewedBy: string | null; knowledgeDocumentId: string | null; knowledgeVersionId: string | null;
+  knowledge: { documentStatus: string; versionStatus: string; ragAvailable: boolean } | null;
+};
+
+// 工作台概览仍保留既有演示卡片；政策中心的候选列表已改为读取真实 API 数据。
 const policies = [
   { level: "省政府", title: "关于加快推进数字经济高质量发展的有关政策", date: "2026-08-23", state: "待审核", fresh: true },
   { level: "省科技厅", title: "青海省科技计划项目申报工作通知", date: "2026-08-21", state: "已收录", fresh: true },
@@ -324,12 +332,36 @@ function Knowledge({ query, setQuery, lastQuestion, result, asking, phase, error
 }
 
 function PolicyCenter() {
-  const [filter, setFilter] = useState("全部政策");
+  const [filter, setFilter] = useState("ALL");
+  const [sources, setSources] = useState<PolicySourceRecord[]>([]);
+  const [candidates, setCandidates] = useState<PolicyCandidateRecord[]>([]);
+
+  // 政策中心只读取服务端已授权的来源和候选元数据，不再把演示候选当作真实资料。
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      fetch("/api/policy-sources").then((response) => response.ok ? response.json() as Promise<{ sources?: PolicySourceRecord[] }> : { sources: [] }),
+      fetch("/api/policy-candidates?page=1&pageSize=50").then((response) => response.ok ? response.json() as Promise<{ candidates?: PolicyCandidateRecord[] }> : { candidates: [] }),
+    ]).then(([sourceData, candidateData]) => {
+      if (!active) return;
+      setSources(sourceData.sources || []);
+      setCandidates(candidateData.candidates || []);
+    }).catch(() => {
+      if (!active) return;
+      setSources([]);
+      setCandidates([]);
+    });
+    return () => { active = false; };
+  }, []);
+
+  const visibleCandidates = candidates.filter((candidate) => filter === "ALL" || candidate.status === filter);
+  const sourceName = (sourceId: string) => sources.find((source) => source.id === sourceId)?.name || "未关联来源";
+
   return <section className="page">
     <PageTitle kicker="外部政策情报" title="青海政策监测中心" text="定期检查青海省政府及相关厅局官网。系统负责发现和比对，管理员审核后才进入正式知识库。"/>
-    <div className="policy-toolbar"><div>{["全部政策","待审核","已收录","已更新"].map(x => <button className={filter === x ? "active" : ""} onClick={() => setFilter(x)} key={x}>{x}</button>)}</div><button className="scan"><Icon name="refresh" size={16}/>立即检查官网</button></div>
+    <div className="policy-toolbar"><div>{[{ value: "ALL", label: "全部政策" }, { value: "PENDING_REVIEW", label: "待审核" }, { value: "APPROVED", label: "已通过候选审核" }, { value: "REJECTED", label: "已拒绝" }].map((item) => <button className={filter === item.value ? "active" : ""} onClick={() => setFilter(item.value)} key={item.value}>{item.label}</button>)}</div><button className="scan"><Icon name="refresh" size={16}/>立即检查官网</button></div>
     <div className="policy-layout">
-      <div className="panel policy-list">{policies.filter(p => filter === "全部政策" || p.state === filter).map(p => <article key={p.title}><span className="gov-icon">政</span><div><div><em>{p.level}</em>{p.fresh && <b>新发现</b>}</div><h3>{p.title}</h3><p>发布日期：{p.date}　来源：青海省官方政府网站　已保存原始链接和网页快照</p></div><aside><i className={p.state === "待审核" ? "pending" : ""}>{p.state}</i><button>查看详情</button></aside></article>)}</div>
+      <div className="panel policy-list">{visibleCandidates.map((candidate) => <article key={candidate.id}><span className="gov-icon">政</span><div><div><em>{sourceName(candidate.policySourceId)}</em></div><h3>{candidate.title}</h3><p>文号：{candidate.documentNumber || "未填写"}　状态：{candidate.status}　审核人：{candidate.reviewedBy || "未审核"}　正式资料：{candidate.knowledge?.documentStatus || "未关联"}　RAG：{candidate.knowledge?.ragAvailable ? "可用" : "不可用"}</p></div><aside><i className={candidate.status === "PENDING_REVIEW" ? "pending" : ""}>{candidate.status}</i><button>查看详情</button></aside></article>)}</div>
       <aside className="panel watch-sites"><h3>监测网站</h3><p>仅采集经批准的政府官方网站</p>{["青海省人民政府","青海省科学技术厅","青海省农业农村厅","青海省工业和信息化厅","青海省发展改革委"].map((s,i) => <div key={s}><i/ ><span>{s}</span><em>{i < 3 ? "今日已检查" : "等待检查"}</em></div>)}</aside>
     </div>
   </section>;

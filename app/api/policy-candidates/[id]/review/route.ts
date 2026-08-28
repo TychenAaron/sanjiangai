@@ -1,0 +1,5 @@
+// 政策候选审核接口：候选通过只提交现有正式资料审核，绝不直接成为 RAG 依据。
+import { accessError, requireAccessUser } from "../../../../../lib/access";
+import { reviewPolicyCandidate } from "../../../../../lib/policy-candidates";
+export const runtime = "edge";
+export async function POST(request: Request, context: { params: Promise<{ id: string }> }) { try { const user = await requireAccessUser(request); const { id } = await context.params; const body = await request.json() as { decision?: "approve" | "reject"; comment?: string }; if (body.decision !== "approve" && body.decision !== "reject") return Response.json({ error: "审核动作无效" }, { status: 400 }); const result = await reviewPolicyCandidate(user, id, body.decision, String(body.comment || "").trim()); if (result === "forbidden") return Response.json({ error: "仅管理员可审核政策候选" }, { status: 403 }); if (!result) return Response.json({ error: "政策候选不存在" }, { status: 404 }); if (result === "invalid") return Response.json({ error: "候选当前不能重复审核" }, { status: 409 }); return Response.json(result); } catch (e) { return accessError(e, "审核政策候选失败"); } }

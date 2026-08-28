@@ -79,6 +79,11 @@ export const policySources = sqliteTable("policy_sources", {
   lastCheckedAt: text("last_checked_at"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+// 政策候选只保存待人工判断的外部或手工内容，绝不直接进入 documents 或 RAG。
+export const policyCandidates = sqliteTable("policy_candidates", {
+  id: text("id").primaryKey(), policySourceId: text("policy_source_id").notNull(), title: text("title").notNull(), documentNumber: text("document_number"), issuingBody: text("issuing_body"), publishDate: text("publish_date"), effectiveDate: text("effective_date"), sourceReference: text("source_reference"), rawContent: text("raw_content").notNull(), contentHash: text("content_hash").notNull(), status: text("status").notNull().default("PENDING_REVIEW"), reviewedBy: text("reviewed_by"), reviewedAt: text("reviewed_at"), reviewComment: text("review_comment"), knowledgeDocumentId: text("knowledge_document_id"), knowledgeVersionId: text("knowledge_version_id"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`), updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [uniqueIndex("policy_candidate_identity_hash_unique").on(table.policySourceId, table.title, table.contentHash), index("policy_candidates_status_idx").on(table.status), index("policy_candidates_source_idx").on(table.policySourceId)]);
+
 export const policies = sqliteTable("policies", {
   id: text("id").primaryKey(), sourceId: text("source_id").notNull(), title: text("title").notNull(), publishDate: text("publish_date"),
   originalUrl: text("original_url").notNull(), contentHash: text("content_hash"), reviewStatus: text("review_status").notNull().default("pending"),
