@@ -270,24 +270,29 @@ export async function answerFromCitations(query: string, citations: KnowledgeCit
   return { ...result, citations };
 }
 
-export async function answerKnowledge(user: AccessUser, query: string, history: Array<{ role: "assistant"; content: string }> = []) {
-  const matches = await retrieveAuthorized(user, query);
-  const citations: KnowledgeCitation[] = matches.map(row => ({
-    documentId: row.document.id,
-    versionId: row.versionId,
-    title: row.document.title,
-    category: row.document.resourceCategory,
-    sourceOrganization: row.document.sourceOrganization,
-    documentDate: row.document.documentDate,
-    version: row.versionNo,
-    // 引用摘要只用于已完成权限过滤的模型上下文；浏览器默认不接收，预览需通过单独权限接口重新读取。
-    excerpt: row.chunk.content.slice(0, 520),
-    sourceType: row.document.sourceType,
-    chunkIndex: row.chunk.chunkIndex,
-    // 说明：分片序号来自 document_chunks.chunk_index，从零开始存储，对用户展示时转换为“第 N 段”。
-    location: `第${row.chunk.chunkIndex + 1}段`,
-    score: Number(row.score.toFixed(1)),
+// 将最终 Top Evidence 转为既有 citation 结构。输入只能来自 Reranked Hybrid 输出，输出保留文档、版本、分片和定位，供模型上下文与会话快照共同使用。
+function citationsFromTopEvidence(evidence: RerankedKnowledgeEvidence[]): KnowledgeCitation[] {
+  return evidence.map((item) => ({
+    documentId: item.documentId,
+    versionId: item.versionId,
+    title: item.title,
+    category: item.category,
+    sourceOrganization: item.sourceOrganization,
+    documentDate: item.documentDate,
+    version: item.version,
+    // 引用摘要只来自本次最终证据；浏览器默认不接收，预览仍需走单独权限接口重新校验。
+    excerpt: item.excerpt,
+    sourceType: item.sourceType,
+    chunkIndex: item.chunkIndex,
+    location: item.location,
+    score: Number((item.rerankScore ?? item.fusionScore).toFixed(6)),
   }));
+}
+
+// 生成基于正式资料的知识回答。先完成 Hybrid、Reranker 和 Top Evidence，再仅将最终 citations 发送给模型；无 evidence 时不调用模型网关。
+export async function answerKnowledge(user: AccessUser, query: string, history: Array<{ role: "assistant"; content: string }> = []) {
+  const retrieval = await retrieveAuthorizedRerankedHybrid(user, query);
+  const citations = citationsFromTopEvidence(retrieval.evidence);
   return answerFromCitations(query, citations, history);
 }
 
