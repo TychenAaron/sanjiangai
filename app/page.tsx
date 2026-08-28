@@ -706,6 +706,7 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
   const [selected, setSelected] = useState<DocumentRecord | null>(null);
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
   const [versions, setVersions] = useState<DocumentVersion[]>([]);
   const [versionContent, setVersionContent] = useState("");
   const [changeSummary, setChangeSummary] = useState("人工修改");
@@ -720,7 +721,7 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
 
   function setField(name: string, value: string) { setForm(previous => ({ ...previous, [name]: value })); }
   const isSystemAdmin = user?.role === "system_admin";
-  const canManageLibrary = Boolean(user && ["system_admin", "knowledge_admin"].includes(user.role));
+  const canManageLibrary = isSystemAdmin;
   const loadImportBatches = useCallback(async () => {
     if (!canManageLibrary) return;
     const response = await fetch("/api/knowledge-import-batches?pageSize=10", { cache: "no-store" });
@@ -760,6 +761,26 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
       await refresh();
     } catch (error) { setNotice(error instanceof Error ? error.message : "资料操作失败"); }
     finally { setSaving(false); }
+  }
+
+  /**
+   * 批量删除已选正式资料。
+   * 输入为当前管理员勾选的资料 ID；输出为逐项成功/失败汇总。每项复用既有生命周期删除接口，失败不回滚已成功项。
+   */
+  async function deleteSelectedDocuments() {
+    if (!isSystemAdmin || selectedDocumentIds.length === 0) return;
+    if (!window.confirm(`确认删除已选中的 ${selectedDocumentIds.length} 份资料？此操作会使资料立即退出当前检索和 RAG。`)) return;
+    if (!window.confirm("请再次确认：将逐份清理资料记录、分段和向量索引，已成功删除的资料不会因其他资料失败而回滚。")) return;
+    setSaving(true); setNotice(""); let succeeded = 0; const failed: string[] = [];
+    try {
+      for (const id of selectedDocumentIds) {
+        try { const response = await fetch(`/api/documents/${id}/lifecycle`, { method: "DELETE" }); const result = await response.json() as { error?: string }; if (!response.ok) throw new Error(result.error || "删除失败"); succeeded += 1; }
+        catch (error) { failed.push(error instanceof Error ? error.message : "删除失败"); }
+      }
+      setSelectedDocumentIds([]); if (selected && selectedDocumentIds.includes(selected.id)) setSelected(null);
+      setNotice(`批量删除完成：成功 ${succeeded} 份，失败 ${failed.length} 份。成功项已退出当前检索、RAG 与有效引用范围。${failed.length ? `失败原因：${failed.slice(0, 3).join("；")}` : ""}`);
+      await refresh();
+    } finally { setSaving(false); }
   }
   async function save(submitMode: "draft" | "pending") {
     if (ingestMode === "file") { await saveUpload(); return; }
@@ -870,8 +891,9 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
     </div>}
     {error && <div className="notice error">数据库暂时无法读取：{error}</div>}
     <div className="library-filters"><select value={statusFilter} onChange={event => setStatusFilter(event.target.value)}><option value="all">全部状态</option><option value="pending_review">待审核</option><option value="approved">已批准</option><option value="rejected">已拒绝</option><option value="archived">已归档</option></select><select value={categoryFilter} onChange={event => setCategoryFilter(event.target.value)}><option value="all">全部类别</option>{[...new Set(records.map(item => item.resourceCategory))].map(item => <option key={item} value={item}>{item}</option>)}</select><input value={sourceFilter} onChange={event => setSourceFilter(event.target.value)} placeholder="来源单位"/><input type="date" value={dateFrom} onChange={event => setDateFrom(event.target.value)} title="文件日期起始"/><input type="date" value={dateTo} onChange={event => setDateTo(event.target.value)} title="文件日期截止"/></div>
-    <div className="panel library-table"><div className="table-head"><span>资料</span><span>类别与来源</span><span>可靠性</span><span>状态</span><span>文件日期</span></div>
-      {loading ? <div className="table-empty">正在读取资料数据库…</div> : visibleRecords.length === 0 ? <div className="table-empty">当前筛选范围内没有可见资料。</div> : visibleRecords.map(d => <button className={selected?.id === d.id ? "selected-row" : ""} onClick={() => { setReviewForm({ resourceCategory: d.resourceCategory || "", sourceOrganization: d.sourceOrganization || "", documentDate: d.documentDate || "", applicableScope: d.applicableScope || "", reliabilityScore: String(d.reliabilityScore || 60), comment: d.reviewNote || "" }); void openRecord(d); }} key={d.id}><span><i>{d.documentType[0]}</i><span><b>{d.title}</b><small>{d.ownerDepartment} · {d.permissionScope}{d.fileName ? ` · ${d.fileName.split(".").pop()?.toUpperCase()} · ${d.parseStatus === "parsed" ? "已解析" : d.parseStatus === "pending_conversion" ? "待转换解析" : "待 OCR"}` : ""}</small></span></span><span>{d.resourceCategory || "未分类"}<small>{d.sourceOrganization || "待补充来源"}</small></span><span>{d.reliabilityScore || 0} 分</span><span><em className={`record-status ${d.resourceStatus}`}>{statusLabel(d.resourceStatus)}</em></span><span>{d.documentDate || "待补充"}</span></button>)}
+    {isSystemAdmin && <div className="bulk-document-actions"><label><input type="checkbox" checked={visibleRecords.length > 0 && visibleRecords.every(record => selectedDocumentIds.includes(record.id))} onChange={event => setSelectedDocumentIds(event.target.checked ? visibleRecords.map(record => record.id) : [])}/>全选当前页</label><span>已选 {selectedDocumentIds.length} 份</span><button disabled={saving || selectedDocumentIds.length === 0} onClick={() => void deleteSelectedDocuments()}>批量删除</button></div>}
+    <div className="panel library-table"><div className="table-head"><span>{isSystemAdmin ? "选择 / 资料" : "资料"}</span><span>类别与来源</span><span>可靠性</span><span>状态</span><span>文件日期</span></div>
+      {loading ? <div className="table-empty">正在读取资料数据库…</div> : visibleRecords.length === 0 ? <div className="table-empty">当前筛选范围内没有可见资料。</div> : visibleRecords.map(d => <div className="library-row" key={d.id}>{isSystemAdmin && <input aria-label={`选择 ${d.title}`} type="checkbox" checked={selectedDocumentIds.includes(d.id)} onChange={event => setSelectedDocumentIds(ids => event.target.checked ? [...new Set([...ids, d.id])] : ids.filter(id => id !== d.id))}/>}<button className={selected?.id === d.id ? "selected-row" : ""} onClick={() => { setReviewForm({ resourceCategory: d.resourceCategory || "", sourceOrganization: d.sourceOrganization || "", documentDate: d.documentDate || "", applicableScope: d.applicableScope || "", reliabilityScore: String(d.reliabilityScore || 60), comment: d.reviewNote || "" }); void openRecord(d); }}><span><i>{d.documentType[0]}</i><span><b>{d.title}</b><small>{d.ownerDepartment} · {d.permissionScope}{d.fileName ? ` · ${d.fileName.split(".").pop()?.toUpperCase()} · ${d.parseStatus === "parsed" ? "已解析" : d.parseStatus === "pending_conversion" ? "待转换解析" : "待 OCR"}` : ""}</small></span></span><span>{d.resourceCategory || "未分类"}<small>{d.sourceOrganization || "待补充来源"}</small></span><span>{d.reliabilityScore || 0} 分</span><span><em className={`record-status ${d.resourceStatus}`}>{statusLabel(d.resourceStatus)}</em></span><span>{d.documentDate || "待补充"}</span></button></div>)}
     </div>
     {selected && <section className="panel version-panel"><div className="version-head"><div><strong>{selected.title}</strong><span>版本链 · 原始内容不覆盖</span></div><button onClick={() => { setVersionEditor(!versionEditor); setVersionContent(versions[0]?.content || ""); }}>{versionEditor ? "取消修改" : "＋ 创建新版本"}</button></div>
       {versionEditor && <div className="version-editor"><label><span>修改说明</span><input value={changeSummary} onChange={e => setChangeSummary(e.target.value)} placeholder="例如：根据2026年第3次办公会意见修订"/></label><label><span>新版本正文</span><textarea value={versionContent} onChange={e => setVersionContent(e.target.value)}/></label><button disabled={saving} onClick={() => void saveVersion()}>{saving ? "正在生成…" : "生成新版本并提交审核"}</button></div>}

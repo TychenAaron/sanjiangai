@@ -152,6 +152,15 @@ button { cursor: pointer; }
 .empty h2 { margin: 14px 0 0; color: var(--navy); font-size: 18px; }
 .empty p { color: var(--muted); font-size: 10px; }
 .conversation { flex: 1; }
+.conversation-list { display: flex; max-height: 330px; flex-direction: column; gap: 6px; overflow-y: auto; padding: 10px; }
+.conversation-list > button { flex: 0 0 auto; padding: 9px 11px; border: 1px dashed #b7c7d5; border-radius: 7px; background: #f7fafc; color: var(--navy); font-size: 8px; text-align: left; }
+.conversation-list > div { display: grid; flex: 0 0 auto; grid-template-columns: minmax(0, 1fr) auto 25px; gap: 8px; align-items: center; min-height: 42px; padding: 8px 9px; border: 1px solid transparent; border-radius: 7px; background: #fff; }
+.conversation-list > div:hover { background: #f6f9fb; }
+.conversation-list > div.active { border-color: #b9d5c6; background: #eff8f3; }
+.conversation-list > div > button:first-child { overflow: hidden; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 8px; font-weight: 700; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-list > div small { color: var(--muted); font-size: 7px; white-space: nowrap; }
+.conversation-list > div > button:last-child { width: 25px; height: 25px; border: 1px solid #e1e7ed; border-radius: 50%; background: white; color: #a45249; font-size: 13px; line-height: 1; }
+.conversation-list > div > button:last-child:hover { border-color: #c96c62; background: #fff2f0; }
 .question { width: fit-content; max-width: 72%; margin-left: auto; padding: 11px 14px; border-radius: 12px 12px 3px 12px; background: var(--navy); color: white; font-size: 11px; }
 .answer { display: flex; gap: 11px; width: min(760px,90%); margin-top: 23px; }
 .answer p { margin: 0 0 9px; color: #405062; font-size: 11px; line-height: 1.8; }
@@ -366,15 +375,22 @@ button { cursor: pointer; }
 .overview-grid .boundary li { display: list-item; margin-left: 15px; color: #865954; list-style: disc; }
 .library-table { overflow: hidden; }
 .table-head, .library-table > button { display: grid; grid-template-columns: 2.5fr .7fr .55fr .8fr .75fr; align-items: center; gap: 10px; width: 100%; padding: 11px 15px; }
+.library-row { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); background: white; }
+.library-row > input { flex: 0 0 auto; width: 16px; height: 16px; margin: auto 0 auto 12px; accent-color: var(--green); }
+.library-row > button { display: grid; flex: 1; grid-template-columns: 2.5fr .7fr .55fr .8fr .75fr; align-items: center; gap: 10px; width: 100%; padding: 11px 15px; border: 0; background: white; color: var(--ink); font-size: 8px; text-align: left; }
 .table-head { background: var(--navy); color: white; font-size: 8px; }
-.library-table > button { border: 0; border-bottom: 1px solid var(--line); background: white; color: var(--ink); font-size: 8px; text-align: left; }
-.library-table > button:hover, .library-table > button.selected-row { background: #f5f9f7; }
-.library-table > button > span:first-child { display: flex; align-items: center; gap: 8px; }
-.library-table > button > span:first-child i { display: grid; place-items: center; width: 25px; height: 29px; border-radius: 4px; background: #eaf0f7; color: var(--blue); font-style: normal; }
-.library-table > button > span:first-child > span { min-width: 0; }
-.library-table > button > span:first-child b, .library-table > button > span:first-child small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.library-table > button > span:first-child b { color: var(--ink); font-size: 8px; }
-.library-table > button > span:first-child small { margin-top: 3px; color: var(--muted); font-size: 7px; }
+.library-row > button:hover, .library-row > button.selected-row { background: #f5f9f7; }
+.library-row > button > span:first-child { display: flex; align-items: center; gap: 8px; }
+.library-row > button > span:first-child i { display: grid; place-items: center; width: 25px; height: 29px; border-radius: 4px; background: #eaf0f7; color: var(--blue); font-style: normal; }
+.library-row > button > span:first-child > span { min-width: 0; }
+.library-row > button > span:first-child b, .library-row > button > span:first-child small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-row > button > span:first-child b { color: var(--ink); font-size: 8px; }
+.library-row > button > span:first-child small { margin-top: 3px; color: var(--muted); font-size: 7px; }
+.bulk-document-actions { display: flex; align-items: center; gap: 10px; margin: 10px 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: #f8fafb; color: var(--muted); font-size: 8px; }
+.bulk-document-actions label { display: flex; align-items: center; gap: 6px; color: var(--ink); }
+.bulk-document-actions input { accent-color: var(--green); }
+.bulk-document-actions button { margin-left: auto; padding: 7px 10px; border: 1px solid #d9a29c; border-radius: 6px; background: white; color: #a24b44; font-size: 8px; }
+.bulk-document-actions button:disabled { opacity: .5; cursor: not-allowed; }
 .library-actions { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 10px; }
 .library-actions strong, .library-actions span { display: block; }
 .library-actions strong { color: var(--navy); font-size: 12px; }
@@ -626,8 +642,8 @@ button { cursor: pointer; }
   .data-flow { display: block; }
   .data-flow > i { display: block; padding: 5px; transform: rotate(90deg); }
   .table-head { display: none; }
-  .library-table > button { grid-template-columns: 1fr auto; }
-  .library-table > button span:nth-child(2), .library-table > button span:nth-child(3), .library-table > button span:nth-child(5) { display: none; }
+  .library-table > button, .library-row > button { grid-template-columns: 1fr auto; }
+  .library-table > button span:nth-child(2), .library-table > button span:nth-child(3), .library-table > button span:nth-child(5), .library-row > button span:nth-child(2), .library-row > button span:nth-child(3), .library-row > button span:nth-child(5) { display: none; }
   .form-actions { align-items: stretch; flex-direction: column; }
   .ingest-mode { align-items: flex-start; flex-wrap: wrap; }
   .ingest-mode > span { width: 100%; margin: 3px 0 0; }

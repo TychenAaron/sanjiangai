@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { approvals, auditLogs, documents, documentVersions } from "../../../../db/schema";
-import { accessError, canManageUploadRules, canUploadDocument, requireAccessUser } from "../../../../lib/access";
+import { accessError, canUploadDocument, requireAccessUser } from "../../../../lib/access";
 import { extractUpload, indexDocumentVersion, safeStorageName } from "../../../../lib/ingestion";
 import { recordKnowledgeImportItem, refreshKnowledgeImportBatch } from "../../../../lib/knowledge-import-batch";
 import { findBlockedMatches } from "../../../../lib/upload-control";
@@ -39,11 +39,11 @@ export async function POST(request: Request) {
   let batch: BatchContext | null = null; let form: FormData | null = null; let file: File | null = null;
   try {
     const user = await requireAccessUser(request);
-    if (!canManageUploadRules(user)) return Response.json({ error: "仅资料管理管理员可以上传知识资源" }, { status: 403 });
+    if (user.role !== "system_admin") return Response.json({ error: "仅系统管理员可以上传知识资源" }, { status: 403 });
     form = await request.formData();
     const incoming = form.get("file"); file = incoming instanceof File ? incoming : null;
     if (!file) return Response.json({ error: "请选择要上传的文件" }, { status: 400 });
-    batch = await getBatchContext(form, user.id, canManageUploadRules(user));
+    batch = await getBatchContext(form, user.id, user.role === "system_admin");
     if (form.get("confirmedDesensitized") !== "true") { await recordBatchTerminal(batch, form, file, "failed", "未确认脱敏"); return Response.json({ error: "上传文件必须先确认已脱敏" }, { status: 400 }); }
 
     const trialDataClass = batch?.trialDataClass || String(form.get("trialDataClass") || "T2-内部脱敏测试");

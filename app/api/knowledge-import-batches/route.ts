@@ -2,7 +2,7 @@
 import { desc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { knowledgeDatasets, knowledgeImportBatches } from "../../../db/schema";
-import { accessError, canManageUploadRules, requireAccessUser } from "../../../lib/access";
+import { accessError, requireAccessUser } from "../../../lib/access";
 
 export const runtime = "edge";
 const trialClasses = new Set(["T1-公开资料", "T2-内部脱敏测试", "T3-部门隔离测试"]);
@@ -11,7 +11,7 @@ const trialClasses = new Set(["T1-公开资料", "T2-内部脱敏测试", "T3-�
 export async function GET(request: Request) {
   try {
     const user = await requireAccessUser(request);
-    if (!canManageUploadRules(user)) return Response.json({ error: "当前账号无资料批量导入管理权限" }, { status: 403 });
+    if (user.role !== "system_admin") return Response.json({ error: "仅系统管理员可以管理资料批量导入" }, { status: 403 });
     const url = new URL(request.url);
     const page = Math.max(1, Number(url.searchParams.get("page") || 1));
     const pageSize = Math.min(100, Math.max(1, Number(url.searchParams.get("pageSize") || 20)));
@@ -26,7 +26,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const user = await requireAccessUser(request);
-    if (!canManageUploadRules(user)) return Response.json({ error: "当前账号无资料批量导入管理权限" }, { status: 403 });
+    if (user.role !== "system_admin") return Response.json({ error: "仅系统管理员可以管理资料批量导入" }, { status: 403 });
     const body = await request.json() as Record<string, unknown>;
     const datasetName = String(body.datasetName || "").trim();
     const totalCount = Number(body.totalCount || 0);
