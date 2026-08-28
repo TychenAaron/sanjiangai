@@ -79,6 +79,15 @@ export const policySources = sqliteTable("policy_sources", {
   lastCheckedAt: text("last_checked_at"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+// OA 连接器配置与正式知识库完全隔离；credential_ciphertext 只保存服务端加密后的凭证，永不下发浏览器。
+export const oaConnectorConfigs = sqliteTable("oa_connector_configs", {
+  id: text("id").primaryKey(), name: text("name").notNull(), baseUrl: text("base_url").notNull(), endpointPath: text("endpoint_path").notNull(),
+  requestMethod: text("request_method").notNull().default("GET"), contentType: text("content_type").notNull().default("application/json"), authType: text("auth_type").notNull().default("NONE"),
+  customAuthHeaderName: text("custom_auth_header_name"), headersJson: text("headers_json").notNull().default("{}"), credentialCiphertext: text("credential_ciphertext"), timeoutMs: integer("timeout_ms").notNull().default(15000),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(false), lastCheckStatus: text("last_check_status"), lastCheckHttpStatus: integer("last_check_http_status"), lastCheckDurationMs: integer("last_check_duration_ms"), lastCheckedAt: text("last_checked_at"),
+  createdBy: text("created_by").notNull(), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`), updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [uniqueIndex("oa_connector_configs_name_unique").on(table.name), index("oa_connector_configs_enabled_idx").on(table.enabled)]);
+
 // 政策候选只保存待人工判断的外部或手工内容，绝不直接进入 documents 或 RAG。
 export const policyCandidates = sqliteTable("policy_candidates", {
   id: text("id").primaryKey(), policySourceId: text("policy_source_id").notNull(), title: text("title").notNull(), documentNumber: text("document_number"), issuingBody: text("issuing_body"), publishDate: text("publish_date"), effectiveDate: text("effective_date"), sourceReference: text("source_reference"), rawContent: text("raw_content").notNull(), contentHash: text("content_hash").notNull(), status: text("status").notNull().default("PENDING_REVIEW"), reviewedBy: text("reviewed_by"), reviewedAt: text("reviewed_at"), reviewComment: text("review_comment"), knowledgeDocumentId: text("knowledge_document_id"), knowledgeVersionId: text("knowledge_version_id"), createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`), updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),

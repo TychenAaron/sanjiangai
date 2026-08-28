@@ -1,0 +1,4 @@
+-- OA 连接配置仅保存受控连接参数和加密凭证，不触发同步、资料导入或 RAG。
+CREATE TABLE oa_connector_configs (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, base_url TEXT NOT NULL, endpoint_path TEXT NOT NULL, request_method TEXT NOT NULL DEFAULT 'GET', content_type TEXT NOT NULL DEFAULT 'application/json', auth_type TEXT NOT NULL DEFAULT 'NONE', custom_auth_header_name TEXT, headers_json TEXT NOT NULL DEFAULT '{}', credential_ciphertext TEXT, timeout_ms INTEGER NOT NULL DEFAULT 15000, enabled INTEGER NOT NULL DEFAULT 0, last_check_status TEXT, last_check_http_status INTEGER, last_check_duration_ms INTEGER, last_checked_at TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE UNIQUE INDEX oa_connector_configs_name_unique ON oa_connector_configs (name);
+CREATE INDEX oa_connector_configs_enabled_idx ON oa_connector_configs (enabled);

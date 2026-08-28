@@ -89,6 +89,11 @@ type PolicyCandidateRecord = {
   publishDate: string | null; status: string; reviewedBy: string | null; knowledgeDocumentId: string | null; knowledgeVersionId: string | null;
   knowledge: { documentStatus: string; versionStatus: string; ragAvailable: boolean } | null;
 };
+type OaConnectorRecord = {
+  id: string; name: string; baseUrl: string; endpointPath: string; requestMethod: "GET" | "HEAD"; contentType: string; authType: "NONE" | "BEARER_TOKEN" | "API_KEY" | "BASIC_AUTH" | "CUSTOM_HEADER";
+  customAuthHeaderName: string | null; headers: Record<string, string>; timeoutMs: number; enabled: boolean; hasCredentials: boolean;
+  lastCheckStatus: string | null; lastCheckHttpStatus: number | null; lastCheckDurationMs: number | null; lastCheckedAt: string | null;
+};
 
 // 工作台概览仍保留既有演示卡片；政策中心的候选列表已改为读取真实 API 数据。
 const policies = [
@@ -925,6 +930,7 @@ function Admin({ user, records, summary, refresh }: { user: SessionUser | null; 
       ["扩展模块管理","财务、运营、采购、供应链和项目管理","仅预留接口"],
     ].map(x => <button className="panel" key={x[0]}><span><strong>{x[0]}</strong><small>{x[1]}</small></span><em>{x[2]}</em><Icon name="arrow" size={17}/></button>)}</div>
     {message && <div className="notice admin-notice">{message}</div>}
+    <OaConnectorAdmin isSystemAdmin={user?.role === "system_admin"}/>
     {canManageRules && <section className="panel upload-control-panel"><div className="control-head"><div><h2>禁止上传词条库</h2><p>命中规则时，系统在保存原文件之前拒绝上传，并记录操作账号、文件名和命中词条。</p></div><b>{blockedTerms.filter(item => item.enabled).length}条生效中</b></div>
       <div className="rule-form"><label><span>禁止词条 *</span><input value={ruleForm.term} onChange={event => setRuleForm({ ...ruleForm, term: event.target.value })} placeholder="例如：某保密项目代号"/></label><label><span>分类</span><select value={ruleForm.category} onChange={event => setRuleForm({ ...ruleForm, category: event.target.value })}><option>涉密与敏感事项</option><option>个人隐私</option><option>财务与合同敏感信息</option><option>账号口令与密钥</option><option>自定义禁止项</option></select></label><label><span>检查范围</span><select value={ruleForm.matchScope} onChange={event => setRuleForm({ ...ruleForm, matchScope: event.target.value })}><option value="all">文件名＋标题＋正文</option><option value="filename">仅文件名和标题</option><option value="content">仅正文</option></select></label><label><span>管理备注</span><input value={ruleForm.note} onChange={event => setRuleForm({ ...ruleForm, note: event.target.value })} placeholder="填写设置原因或批准人"/></label><button disabled={working === "new-rule"} onClick={() => void addBlockedTerm()}>{working === "new-rule" ? "正在添加…" : "添加并立即启用"}</button></div>
       <div className="rule-list"><div><span>词条</span><span>分类</span><span>检查范围</span><span>状态</span><span>操作</span></div>{blockedTerms.length === 0 ? <p>尚未设置词条。建议先加入用于测试的虚构项目代号，验证拦截后再设置正式规则。</p> : blockedTerms.map(item => <article key={item.id}><span><b>{item.term}</b><small>{item.note || `由${item.createdBy}设置`}</small></span><span>{item.category}</span><span>{item.matchScope === "all" ? "文件名＋正文" : item.matchScope === "filename" ? "仅文件名" : "仅正文"}</span><span><em className={item.enabled ? "enabled" : "disabled"}>{item.enabled ? "已启用" : "已停用"}</em></span><span><button disabled={working === item.id} onClick={() => void toggleBlockedTerm(item)}>{item.enabled ? "停用" : "启用"}</button><button disabled={working === item.id} className="delete" onClick={() => void deleteBlockedTerm(item)}>删除</button></span></article>)}</div>
@@ -936,6 +942,66 @@ function Admin({ user, records, summary, refresh }: { user: SessionUser | null; 
       </section>
       <section className="panel audit-panel"><h2>最近审计记录</h2><p>关键操作自动记录操作人、对象和时间。</p>{logs.length === 0 ? <div className="queue-empty">暂无操作记录</div> : logs.slice(0,8).map(log => <article key={log.id}><i/><div><strong>{log.action} · {log.operator}</strong><span>{log.detail}</span><small>{formatDate(log.createdAt)}</small></div></article>)}</section>
     </div>
+  </section>;
+}
+
+function OaConnectorAdmin({ isSystemAdmin }: { isSystemAdmin: boolean }) {
+  const emptyForm = { name: "", baseUrl: "", endpointPath: "", requestMethod: "GET" as const, contentType: "application/json", authType: "NONE" as OaConnectorRecord["authType"], customAuthHeaderName: "", headersText: "{}", timeoutMs: 15000, enabled: false, token: "", appKey: "", appSecret: "", apiKey: "", username: "", password: "", customHeaderValue: "" };
+  const [connectors, setConnectors] = useState<OaConnectorRecord[]>([]);
+  const [form, setForm] = useState(emptyForm);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [working, setWorking] = useState("");
+  const [message, setMessage] = useState("");
+
+  const load = useCallback(async () => {
+    if (!isSystemAdmin) return;
+    const response = await fetch("/api/oa-connectors", { cache: "no-store" });
+    const result = await response.json() as { connectors?: OaConnectorRecord[]; error?: string };
+    if (response.ok) setConnectors(result.connectors || []); else setMessage(result.error || "读取 OA 配置失败");
+  }, [isSystemAdmin]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void load(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+
+  function edit(connector: OaConnectorRecord) {
+    // 凭证从不回填到浏览器；重新编辑时只有新输入的凭证才会替换服务端密文。
+    setEditingId(connector.id);
+    setForm({ ...emptyForm, name: connector.name, baseUrl: connector.baseUrl, endpointPath: connector.endpointPath, requestMethod: connector.requestMethod, contentType: connector.contentType, authType: connector.authType, customAuthHeaderName: connector.customAuthHeaderName || "", headersText: JSON.stringify(connector.headers), timeoutMs: connector.timeoutMs, enabled: connector.enabled });
+    setMessage(connector.hasCredentials ? "已保存服务端凭证；如需替换，请重新输入。" : "正在编辑 OA 配置。");
+  }
+
+  async function save() {
+    setWorking("save"); setMessage("");
+    try {
+      let headers: Record<string, string>; try { headers = JSON.parse(form.headersText) as Record<string, string>; } catch { throw new Error("Header 配置必须是 JSON 对象"); }
+      const credentials = Object.fromEntries(Object.entries({ token: form.token, appKey: form.appKey, appSecret: form.appSecret, apiKey: form.apiKey, username: form.username, password: form.password, customHeaderValue: form.customHeaderValue }).filter(([, value]) => value.trim()));
+      const payload = { ...form, headers, credentials: Object.keys(credentials).length ? credentials : undefined };
+      const response = await fetch(editingId ? `/api/oa-connectors/${editingId}` : "/api/oa-connectors", { method: editingId ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "保存 OA 配置失败");
+      setForm(emptyForm); setEditingId(null); setMessage("OA 配置已保存。测试连接不会同步或导入任何资料。"); await load();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "保存 OA 配置失败"); }
+    finally { setWorking(""); }
+  }
+
+  async function test(id: string) {
+    setWorking(`test-${id}`); setMessage("");
+    try {
+      const response = await fetch(`/api/oa-connectors/${id}/test`, { method: "POST" });
+      const result = await response.json() as { status?: string; httpStatus?: number | null; durationMs?: number; error?: string };
+      if (!response.ok) throw new Error(result.error || "OA 连接检测失败");
+      setMessage(`连接检测：${result.status}；HTTP ${result.httpStatus ?? "无"}；${result.durationMs ?? 0}ms。`); await load();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "OA 连接检测失败"); }
+    finally { setWorking(""); }
+  }
+
+  if (!isSystemAdmin) return null;
+  return <section className="panel oa-connector-panel"><div className="control-head"><div><h2>OA 接入配置</h2><p>仅保存受控连接参数。凭证仅加密保存在服务端；“测试连接”只发起 GET/HEAD 探测，不同步、不导入资料。</p></div><b>管理员专用</b></div>
+    <div className="form-grid oa-connector-form"><label><span>OA 名称 *</span><input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })}/></label><label><span>Base URL *</span><input value={form.baseUrl} onChange={event => setForm({ ...form, baseUrl: event.target.value })} placeholder="https://..."/></label><label><span>API Path / Endpoint *</span><input value={form.endpointPath} onChange={event => setForm({ ...form, endpointPath: event.target.value })} placeholder="/health"/></label><label><span>请求方法</span><select value={form.requestMethod} onChange={event => setForm({ ...form, requestMethod: event.target.value as "GET" | "HEAD" })}><option>GET</option><option>HEAD</option></select></label><label><span>Content-Type</span><input value={form.contentType} onChange={event => setForm({ ...form, contentType: event.target.value })}/></label><label><span>认证方式</span><select value={form.authType} onChange={event => setForm({ ...form, authType: event.target.value as OaConnectorRecord["authType"] })}><option value="NONE">NONE</option><option value="BEARER_TOKEN">BEARER_TOKEN</option><option value="API_KEY">API_KEY</option><option value="BASIC_AUTH">BASIC_AUTH</option><option value="CUSTOM_HEADER">CUSTOM_HEADER</option></select></label><label><span>自定义认证 Header 名</span><input value={form.customAuthHeaderName} onChange={event => setForm({ ...form, customAuthHeaderName: event.target.value })} placeholder="仅 CUSTOM_HEADER 使用"/></label><label><span>超时（毫秒）</span><input type="number" min={500} max={120000} value={form.timeoutMs} onChange={event => setForm({ ...form, timeoutMs: Number(event.target.value) || 15000 })}/></label><label><span>非敏感 Header JSON</span><input value={form.headersText} onChange={event => setForm({ ...form, headersText: event.target.value })} placeholder='{"Accept-Language":"zh-CN"}'/></label><label><span>启用测试连接</span><select value={form.enabled ? "yes" : "no"} onChange={event => setForm({ ...form, enabled: event.target.value === "yes" })}><option value="no">停用</option><option value="yes">启用</option></select></label></div>
+    <div className="form-grid oa-connector-form"><label><span>Token</span><input type="password" value={form.token} onChange={event => setForm({ ...form, token: event.target.value })}/></label><label><span>AppKey</span><input type="password" value={form.appKey} onChange={event => setForm({ ...form, appKey: event.target.value })}/></label><label><span>AppSecret</span><input type="password" value={form.appSecret} onChange={event => setForm({ ...form, appSecret: event.target.value })}/></label><label><span>API Key</span><input type="password" value={form.apiKey} onChange={event => setForm({ ...form, apiKey: event.target.value })}/></label><label><span>Username</span><input value={form.username} onChange={event => setForm({ ...form, username: event.target.value })}/></label><label><span>Password</span><input type="password" value={form.password} onChange={event => setForm({ ...form, password: event.target.value })}/></label><label><span>自定义 Header 值</span><input type="password" value={form.customHeaderValue} onChange={event => setForm({ ...form, customHeaderValue: event.target.value })}/></label><button disabled={working === "save"} onClick={() => void save()}>{working === "save" ? "正在保存…" : editingId ? "保存修改" : "保存配置"}</button></div>
+    {message && <div className="notice admin-notice">{message}</div>}
+    <div className="rule-list oa-connector-list"><div><span>名称</span><span>认证</span><span>启用</span><span>凭证</span><span>最后检测</span><span>操作</span></div>{connectors.length === 0 ? <p>尚未配置 OA 连接器。保存配置不会自动同步任何资料。</p> : connectors.map(connector => <article key={connector.id}><span><b>{connector.name}</b><small>{connector.endpointPath}</small></span><span>{connector.authType}</span><span>{connector.enabled ? "已启用" : "已停用"}</span><span>{connector.hasCredentials ? "已保存（不可查看）" : "未设置"}</span><span>{connector.lastCheckStatus ? `${connector.lastCheckStatus} · ${connector.lastCheckDurationMs ?? 0}ms` : "未检测"}</span><span><button onClick={() => edit(connector)}>编辑</button><button disabled={!connector.enabled || working === `test-${connector.id}`} onClick={() => void test(connector.id)}>{working === `test-${connector.id}` ? "检测中…" : "测试连接"}</button></span></article>)}</div>
   </section>;
 }
 

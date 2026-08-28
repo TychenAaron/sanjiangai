@@ -30,7 +30,7 @@ assert(!disabledOa.enabled && !disabledOa.configured, "默认 OA 配置必须关
 const configuredOa = readOaSyncConfig({ OA_SYNC_ENABLED: "true", OA_BASE_URL: "https://oa.example.invalid", OA_LIST_PATH: "/records", OA_AUTH_TYPE: "api_key", OA_API_KEY: "local-placeholder" });
 assert(configuredOa.enabled && configuredOa.configured && configuredOa.authType === "api_key", "OA 服务端配置解析不正确");
 const oaRoute = await readFile(new URL("../app/api/internal/oa-sync/route.ts", import.meta.url), "utf8");
-assert(oaRoute.includes('user.role !== "system_admin"') && oaRoute.includes("OA 同步尚未配置") && oaRoute.includes("fetchOaList"), "OA 同步入口必须限制管理员并在未配置时不发网");
+assert(oaRoute.includes('user.role !== "system_admin"') && oaRoute.includes("OA 同步尚未配置") && oaRoute.includes("OA 同步尚未实现"), "OA 同步入口必须限制管理员，且本轮不得发网或入库");
 const [documentRoute, uploadRoute, versionRoute] = await Promise.all([
   readFile(new URL("../app/api/documents/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/documents/upload/route.ts", import.meta.url), "utf8"),

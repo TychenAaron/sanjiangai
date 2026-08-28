@@ -1,4 +1,5 @@
 // 本文件提供真实 OA 对接的服务端适配边界；默认关闭，不向浏览器暴露地址、路径或授权信息。
+import type { OaCheckStatus } from "./oa-connector-config";
 export type OaRuntime = Record<string, string | undefined>;
 export type OaSyncConfig = { enabled: boolean; configured: boolean; baseUrl: string; listPath: string; detailPath: string; downloadPath: string; authType: "none" | "bearer" | "api_key"; secret: string; timeoutMs: number };
 export type OaRemoteRecord = { id: string; title: string; sourceOrganization?: string; documentDate?: string; versionMarker?: string; content?: string };
@@ -17,18 +18,26 @@ export function readOaSyncConfig(runtime: OaRuntime): OaSyncConfig {
   return { enabled, configured: Boolean(baseUrl && runtime.OA_LIST_PATH && (authType === "none" || secret)), baseUrl, listPath: runtime.OA_LIST_PATH || "", detailPath: runtime.OA_DETAIL_PATH || "", downloadPath: runtime.OA_DOWNLOAD_PATH || "", authType, secret, timeoutMs: Number.isFinite(timeout) && timeout >= 500 ? Math.min(timeout, 120_000) : 15_000 };
 }
 
-// 仅在已启用且完整配置时调用 OA 清单接口；字段映射集中在本函数，OA 实际字段变化时只改这里。
+// 旧同步入口保留类型兼容，但在本轮明确禁止发起网络读取；待获得具体 OA 字段映射后才可实现。
 export async function fetchOaList(config: OaSyncConfig, requestFetch: typeof fetch = fetch): Promise<OaRemoteRecord[]> {
-  if (!config.enabled || !config.configured) throw new Error("oa_not_configured");
-  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), config.timeoutMs);
-  try {
-    const headers: Record<string, string> = { Accept: "application/json" };
-    if (config.authType === "bearer") headers.Authorization = `Bearer ${config.secret}`;
-    if (config.authType === "api_key") headers["X-API-Key"] = config.secret;
-    const response = await requestFetch(`${config.baseUrl}${config.listPath}`, { headers, signal: controller.signal });
-    if (!response.ok) throw new Error(`oa_http_${response.status}`);
-    const payload = await response.json() as { records?: unknown[]; data?: unknown[] } | unknown[];
-    const rows = Array.isArray(payload) ? payload : payload.records || payload.data || [];
-    return rows.flatMap((row): OaRemoteRecord[] => { const value = row as Record<string, unknown>; const id = String(value.id || value.recordId || "").trim(); const title = String(value.title || value.subject || "").trim(); return id && title ? [{ id, title, sourceOrganization: typeof value.sourceOrganization === "string" ? value.sourceOrganization : undefined, documentDate: typeof value.documentDate === "string" ? value.documentDate : undefined, versionMarker: typeof value.version === "string" ? value.version : undefined, content: typeof value.content === "string" ? value.content : undefined }] : []; });
-  } finally { clearTimeout(timer); }
+  void config; void requestFetch;
+  throw new Error("oa_not_implemented");
+}
+
+// 新的可配置连接器统一能力：本轮仅开放只读 testConnection；资料读取接口明确返回未实现，不能被误认为已接通同步。
+export type OaConnectorFoundation = {
+  testConnection: () => Promise<{ status: OaCheckStatus; httpStatus: number | null; durationMs: number }>;
+  fetchDocuments: () => Promise<{ status: "NOT_CONFIGURED" | "NOT_IMPLEMENTED" }>;
+  fetchDocumentDetail: (documentId: string) => Promise<{ status: "NOT_CONFIGURED" | "NOT_IMPLEMENTED"; documentId: string }>;
+};
+
+/**
+ * 创建受控 OA Connector。输入是已验证、已解密的服务端配置；输出不包含同步能力，避免测试成功被误解为已启用导入。
+ */
+export function createOaConnector(testConnection: OaConnectorFoundation["testConnection"], configured: boolean): OaConnectorFoundation {
+  return {
+    testConnection,
+    fetchDocuments: async () => ({ status: configured ? "NOT_IMPLEMENTED" : "NOT_CONFIGURED" }),
+    fetchDocumentDetail: async (documentId) => ({ status: configured ? "NOT_IMPLEMENTED" : "NOT_CONFIGURED", documentId }),
+  };
 }
