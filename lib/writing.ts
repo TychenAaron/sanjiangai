@@ -1,6 +1,6 @@
 // 本文件集中处理公文写作所需的授权引用、私有参考材料摘要、无模型提纲生成和基础人工检查；不会自动审批、发文或写入正式知识库。
 import type { AccessUser } from "./access";
-import { retrieveAuthorized, type KnowledgeCitation } from "./rag";
+import { retrieveAuthorizedRerankedHybrid, type KnowledgeCitation } from "./rag";
 
 export type WritingType = "请示" | "通知" | "工作情况汇报";
 export const WRITING_TYPES = new Set<WritingType>(["请示", "通知", "工作情况汇报"]);
@@ -15,22 +15,40 @@ export type WritingPrivateReferenceSummary = {
   locations: string[];
 };
 
-// 说明：仅检索当前账号有权、已审核且达到可靠门槛的正式资料，输出可用于公文写作展示的有限引用信息。
+export type WritingKnowledgeRetrieval = {
+  references: KnowledgeCitation[];
+  formalKnowledgeUsed: boolean;
+  retrievalStatus: "hybrid" | "keyword_only" | "no_evidence";
+  vectorStatus: string;
+  rerankerStatus: string;
+  rerankerUsed: boolean;
+};
+
+// 根据写作任务生成受限知识查询。输入只使用用户填写的任务字段，输出截断后的主题摘要；私有参考原文绝不参与公共知识检索。
+export function buildWritingKnowledgeQuery(input: { documentType: WritingType; title: string; recipient: string; facts: string; referenceQuery: string }) {
+  return [input.documentType, input.title, input.recipient, input.referenceQuery, input.facts]
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 500);
+}
+
+// 复用完整正式 RAG 链取得写作证据。权限、生命周期、D4、可靠性、版本、Embedding/Reranker 降级均在此调用之前完成，输出仅为最终 Top Evidence。
+export async function resolveWritingKnowledge(user: AccessUser, query: string): Promise<WritingKnowledgeRetrieval> {
+  if (!query.trim()) return { references: [], formalKnowledgeUsed: false, retrievalStatus: "no_evidence", vectorStatus: "no_scope", rerankerStatus: "no_candidates", rerankerUsed: false };
+  const retrieval = await retrieveAuthorizedRerankedHybrid(user, query);
+  const references = retrieval.evidence.map((item): KnowledgeCitation => ({
+    documentId: item.documentId, versionId: item.versionId, title: item.title, category: item.category,
+    sourceOrganization: item.sourceOrganization, documentDate: item.documentDate, version: item.version,
+    excerpt: item.excerpt, sourceType: item.sourceType, chunkIndex: item.chunkIndex, location: item.location,
+    score: Number((item.rerankScore ?? item.fusionScore).toFixed(6)),
+  }));
+  return { references, formalKnowledgeUsed: references.length > 0, retrievalStatus: retrieval.retrievalStatus, vectorStatus: retrieval.vectorStatus, rerankerStatus: retrieval.rerankerStatus, rerankerUsed: retrieval.rerankerUsed };
+}
+
+// 保留旧调用名称，供既有提纲等服务端调用复用；返回内容已升级为完整 RAG 的最终 Top Evidence。
 export async function resolveWritingReferences(user: AccessUser, query: string) {
-  const matches = await retrieveAuthorized(user, query);
-  return matches
-    // 写作模型和 Word 引用均不允许使用 D4 级资料，即使当前账号对该资料有读取权限也必须在此边界排除。
-    .filter((row) => row.document.securityLevel !== "D4")
-    .map((row): KnowledgeCitation => ({
-    documentId: row.document.id,
-    title: row.document.title,
-    version: row.versionNo,
-    excerpt: row.chunk.content.slice(0, 520),
-    sourceType: row.document.sourceType,
-    chunkIndex: row.chunk.chunkIndex,
-    location: `第${row.chunk.chunkIndex + 1}段`,
-    score: Number(row.score.toFixed(1)),
-    }));
+  return (await resolveWritingKnowledge(user, query)).references;
 }
 
 // 说明：把当前工作区私有参考材料的数据库记录整理成页面和提纲都能复用的摘要结构，不读取正式知识库。

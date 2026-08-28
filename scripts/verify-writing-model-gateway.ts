@@ -26,7 +26,8 @@ let captured = "";
 const successMock: WritingGatewayFetch = async (_url, init) => {
   captured = String(init?.body || "");
   assert(JSON.parse(captured).model === "mock-writing-model", "AI_WRITING_MODEL 未覆盖请求模型名");
-  assert(!captured.includes("mock-secret-not-real") && !captured.includes("某虚构集团") && !captured.includes("LOCAL_AUTHORIZED_REFERENCE") && !captured.includes("92%") && !captured.includes("100%") && !captured.includes("2026年"), "模型请求泄露密钥或参考原文事实");
+  assert(!captured.includes("mock-secret-not-real"), "模型请求不得泄露密钥");
+  assert(captured.includes("[PRIVATE_REFERENCES]") && captured.includes("某虚构集团") && captured.includes("[FORMAL_KNOWLEDGE_EVIDENCE]") && captured.includes("LOCAL_AUTHORIZED_REFERENCE"), "私有材料与正式证据未按分层进入模型 context");
   assert(!captured.includes("response_format"), "本机兼容网关请求不得携带可能被拒绝的 response_format 扩展");
   return new Response(JSON.stringify({ choices: [{ message: { content: validStructured } }] }), { status: 200 });
 };
@@ -41,7 +42,7 @@ assert(captured.includes("privateFormatSkeletons") && captured.includes("titleHi
 console.log("PASS OpenAI-compatible 请求、模型覆盖和输入边界正确");
 
 const similarFormatMessage = JSON.stringify(buildWritingMessages({ ...input, privateReferenceGuidance: [] }));
-assert(similarFormatMessage.includes("authorizedSimilarDocumentFormatSkeletons") && similarFormatMessage.includes("titleHierarchy") && !similarFormatMessage.includes("LOCAL_AUTHORIZED_REFERENCE") && !similarFormatMessage.includes("92%"), "无私有材料时必须只使用授权相似资料的格式骨架");
+assert(similarFormatMessage.includes("authorizedSimilarDocumentFormatSkeletons") && similarFormatMessage.includes("titleHierarchy") && similarFormatMessage.includes("[FORMAL_KNOWLEDGE_EVIDENCE]") && similarFormatMessage.includes("LOCAL_AUTHORIZED_REFERENCE"), "无私有材料时正式证据必须进入模型 context，同时保留格式骨架");
 const templateMessage = JSON.stringify(buildWritingMessages({ ...input, references: [], privateReferenceGuidance: [] }));
 assert(templateMessage.includes("使用系统合格结构化公文模板"), "无任何参考时必须使用系统模板");
 assert(templateMessage.includes("confirmedFacts 和明确正式引用是正文事实的唯一来源") && templateMessage.includes("完成率、通过率、测评结果") && templateMessage.includes("部署事实一律不得出现"), "测试事实未提供数字时，提示词必须禁止补造数量、金额、比例和成果");

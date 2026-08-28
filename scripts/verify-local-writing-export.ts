@@ -17,11 +17,31 @@ function assert(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
 }
 
-// 创建只含虚构事实的公文；服务端在创建时生成结构化正文，不需要标记最终定稿。
+// 创建空工作区后通过现有结构化保存接口写入确定性验收正文。
+// 导出验收不调用模型：本机模型允许连续正文或短暂不可用，均不能影响 Word 编号/表格能力的验证。
 async function createWriting(title: string) {
-  const created = await request("/api/writing", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "create", documentType: "通知", title, recipient: "本机虚构对象", facts: "本机虚构事实，仅用于导出验证。", referenceQuery: "ZXCVB9876" }) });
+  const created = await request("/api/writing", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "create_workspace", documentType: "通知", title, recipient: "本机虚构对象" }) });
   assert(created.status === 201, `创建虚构公文失败 HTTP ${created.status}`);
-  return (await created.json() as { id: string }).id;
+  const id = (await created.json() as { id: string }).id;
+  // 说明：这份完全虚构的结构化内容专门覆盖 Word 的真实编号和表格 XML；不依赖模型是否选择 JSON 输出，也不进入知识资源。
+  const structured = {
+    title,
+    documentType: "通知",
+    recipient: "本机虚构对象",
+    submittingDepartment: "本机虚构部门",
+    dateLabel: "【待人工核验】",
+    blocks: [
+      { id: "heading-1", type: "heading", level: 1, text: "一、虚构工作说明" },
+      { id: "paragraph-1", type: "paragraph", text: "本段仅用于本机结构化 Word 导出验收，不包含真实集团事实。" },
+      { id: "list-1", type: "numbered_list", items: ["核对虚构事项。", "保留【待人工核验】提示。"] },
+      { id: "table-1", type: "table", columns: ["阶段", "主要工作", "成果"], rows: [["准备", "整理虚构测试内容", "测试记录"], ["核验", "导出并检查 Word 结构", "【待人工核验】"]] },
+      { id: "heading-2", type: "heading", level: 1, text: "二、结语" },
+      { id: "paragraph-2", type: "paragraph", text: "请按本机验收流程处理。" },
+    ],
+  };
+  const saved = await request("/api/writing", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "save_structured", id, structured }) });
+  assert(saved.status === 200, `写入虚构结构化正文失败 HTTP ${saved.status}`);
+  return id;
 }
 
 // 说明：创建人可在生成正文后多次导出；DOCX 必须包含真正的编号、表格 XML，且不依赖最终定稿状态。

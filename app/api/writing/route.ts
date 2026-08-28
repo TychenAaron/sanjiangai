@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 import { getDb } from "../../../db";
 import { auditLogs, writingDocuments, writingPrivateReferences, writingVersions } from "../../../db/schema";
 import { accessError, requireAccessUser } from "../../../lib/access";
-import { buildOutline, checkWriting, resolveWritingReferences, summarizePrivateReferences, WRITING_TYPES, type WritingType } from "../../../lib/writing";
+import { buildOutline, buildWritingKnowledgeQuery, checkWriting, resolveWritingKnowledge, summarizePrivateReferences, WRITING_TYPES, type WritingKnowledgeRetrieval, type WritingType } from "../../../lib/writing";
 import { normalizeStructuredWriting, structuredWritingToText } from "../../../lib/writing-structured";
 import { generateWritingWithGateway, resolveWritingModelRuntime, type WritingGenerationResult } from "../../../lib/writing-model-gateway";
 
@@ -66,6 +66,18 @@ async function writeWritingModelAudit(input: { db: ReturnType<typeof getDb>; use
   } catch { /* 审计故障不能让已安全生成的工作区写入失败。 */ }
 }
 
+// 记录写作时正式知识注入的最小审计。只保存是否使用、证据主键和检索状态，不保存私有材料、正文、提示词或证据文本。
+async function writeWritingKnowledgeAudit(input: { db: ReturnType<typeof getDb>; user: { id: string; name: string }; writingId: string; retrieval: WritingKnowledgeRetrieval }) {
+  try {
+    const evidenceIds = input.retrieval.references.map((item) => `${item.documentId}/${item.versionId}/${item.chunkIndex}`).join(",") || "none";
+    await input.db.insert(auditLogs).values({
+      id: crypto.randomUUID(), action: "公文写作正式知识注入", entityType: "writing_document", entityId: input.writingId, operator: input.user.name,
+      detail: `formalKnowledgeUsed=${input.retrieval.formalKnowledgeUsed}; evidence=${evidenceIds}; retrieval=${input.retrieval.retrievalStatus}; vector=${input.retrieval.vectorStatus}; reranker=${input.retrieval.rerankerStatus}; rerankerUsed=${input.retrieval.rerankerUsed}`,
+      createdAt: new Date().toISOString(),
+    });
+  } catch { /* 审计故障不影响已完成权限过滤后的写作生成。 */ }
+}
+
 // 说明：读取公文工作区，创建人只读取自己的草稿，系统管理员读取全部；最终稿不自动进入正式知识库。
 export async function GET(request: Request) {
   try {
@@ -112,12 +124,14 @@ export async function POST(request: Request) {
       if (!writing) return Response.json({ error: "公文草稿不存在" }, { status: 404 });
       if (!canManageWriting(user) && writing.createdByUserId !== user.id) return Response.json({ error: "只能更新自己的公文提纲" }, { status: 403 });
       // 说明：重新检索只使用当前账号仍有权查看的资料，并把新提纲作为同一工作区的 outline 历史版本保存；不会读取无权资料或创建新的公文记录。
-      const references = referenceQuery ? await resolveWritingReferences(user, referenceQuery) : [];
+      const knowledge = await resolveWritingKnowledge(user, buildWritingKnowledgeQuery({ documentType, title, recipient, facts, referenceQuery }));
+      const references = knowledge.references;
       const privateReferences = await loadPrivateReferences(id);
       const outline = buildOutline(documentType, title, recipient, facts, references, privateReferences);
       // 结构化初稿只使用已确认事实、已授权正式依据和私有材料数量；网关绝不接收私有原文、文件名或无权资料。
       const startedAt = Date.now();
       const generation = await generateWritingWithGateway({ documentType, title, recipient, submittingDepartment: writing.submittingDepartment, facts, referenceQuery, references, privateReferenceGuidance: privateReferences.map((item) => ({ format: item.parseFormat, excerpt: item.excerpt, locations: item.locations })) }, getWritingModelRuntime());
+      await writeWritingKnowledgeAudit({ db, user, writingId: id, retrieval: knowledge });
       // 模型失败时只记录最小审计，保留已有工作区和正文，不创建或覆盖 writing_versions。
       if (generation.mode !== "model" || !generation.content) {
         await writeWritingModelAudit({ db, user, writingId: id, result: generation, elapsedMs: Date.now() - startedAt });
@@ -141,10 +155,12 @@ export async function POST(request: Request) {
       const facts = String(body.facts || "").trim();
       const referenceQuery = String(body.referenceQuery || "").trim();
       if (!WRITING_TYPES.has(documentType) || !title) return Response.json({ error: "请选择文种并填写标题" }, { status: 400 });
-      const references = referenceQuery ? await resolveWritingReferences(user, referenceQuery) : [];
+      const knowledge = await resolveWritingKnowledge(user, buildWritingKnowledgeQuery({ documentType, title, recipient, facts, referenceQuery }));
+      const references = knowledge.references;
       const outline = buildOutline(documentType, title, recipient, facts, references, []);
       const now = new Date().toISOString(); const id = crypto.randomUUID(); const versionId = crypto.randomUUID(); const startedAt = Date.now();
       const generation = await generateWritingWithGateway({ documentType, title, recipient, submittingDepartment: user.departmentName, facts, referenceQuery, references, privateReferenceGuidance: [] }, getWritingModelRuntime());
+      await writeWritingKnowledgeAudit({ db, user, writingId: id, retrieval: knowledge });
       // 首次模型失败不创建 writing_documents 或 writing_versions，避免失败时留下模拟或空白正文。
       if (generation.mode !== "model" || !generation.content) {
         await writeWritingModelAudit({ db, user, writingId: id, result: generation, elapsedMs: Date.now() - startedAt });
