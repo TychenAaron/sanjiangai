@@ -76,4 +76,8 @@ result = await generateWritingWithGateway(input, { ...runtime, AI_MODEL_TIMEOUT_
 assert(result.mode === "failed" && result.category === "model_timeout" && !result.structured, "超时不得生成正文");
 result = await generateWritingWithGateway({ ...input, facts: "D4 机密本机虚构内容" }, runtime, noCall);
 assert(result.mode === "failed" && result.category === "model_restricted_input" && !result.structured, "敏感标识不得发送模型或生成正文");
+for (const facts of ["员工请假申请按制度办理。", "因工作需要安排出差并报销差旅费用。", "请落实考勤、调休、加班和培训通知。", "行政办公会议工作安排。"] ) {
+  result = await generateWritingWithGateway({ ...input, facts }, runtime, async () => new Response(JSON.stringify({ choices: [{ message: { content: "常规办公连续正文。" } }] }), { status: 200 }));
+  assert(result.mode === "model" && result.content === "常规办公连续正文。", `常规办公内容不应被受限规则拦截：${facts}`);
+}
 console.log("PASS 传输失败与敏感输入均不生成正文；非结构化模型 content 保留展示");

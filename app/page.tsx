@@ -681,7 +681,7 @@ function WritingV2() {
   }
 
   return <section className="page writing-editor-page">
-    <PageTitle kicker="智能办公" title="公文写作 V2" text="支持当前工作区私有参考材料；它们仅供本公文人工写作参考，不自动进入正式知识库。"/>
+    <PageTitle kicker="智能办公" title="公文写作"/>
     <section className="panel writing-editor">
       <div className="writing-editor-meta">
         <div className="large-types">{["请示", "通知", "工作情况汇报"].map((type) => <button className={form.documentType === type ? "active" : ""} onClick={() => { setForm({ ...form, documentType: type }); setStructuredContent((previous) => previous ? { ...previous, documentType: type as StructuredWriting["documentType"] } : previous); }} key={type}><strong>{type}</strong></button>)}</div>
@@ -746,8 +746,8 @@ function WritingV2() {
               {block.type === "table" && <table><thead><tr>{block.columns.map((column, index) => <th data-writing-table-cell={`${block.id}:-1:${index}`} key={`${block.id}-head-${index}`}>{column}</th>)}</tr></thead><tbody>{block.rows.map((row, rowIndex) => <tr key={`${block.id}-row-${rowIndex}`}>{row.map((cell, columnIndex) => <td data-writing-table-cell={`${block.id}:${rowIndex}:${columnIndex}`} key={`${block.id}-${rowIndex}-${columnIndex}`}>{cell}</td>)}</tr>)}</tbody></table>}
             </div>)}
           </div>
-        </section> : <section className="writing-body structured-writing-body"><div className="writing-body-head"><div><h3>完整正文</h3><span>模型按连续正文返回，可直接全文修改；导出时保存当前文稿。</span></div></div><textarea className="writing-plain-editor" value={plainContent} onChange={(event) => setPlainContent(event.target.value)} aria-label="完整正文编辑区"/></section>}
-        <div className="form-actions writing-editor-actions"><button className="submit" disabled={(!structuredContent && !plainContent.trim()) || exporting} onClick={() => void exportWord()}>{exporting ? "正在导出…" : "导出 Word"}</button></div>
+          <div className="form-actions writing-editor-actions"><button className="submit" disabled={exporting} onClick={() => void exportWord()}>{exporting ? "正在导出…" : "导出 Word"}</button></div>
+        </section> : <section className="writing-body structured-writing-body"><div className="writing-body-head"><div><h3>完整正文</h3><span>模型按连续正文返回，可直接全文修改；导出时保存当前文稿。</span></div></div><textarea className="writing-plain-editor" value={plainContent} onChange={(event) => setPlainContent(event.target.value)} aria-label="完整正文编辑区"/><div className="form-actions writing-editor-actions"><button className="submit" disabled={!plainContent.trim() || exporting} onClick={() => void exportWord()}>{exporting ? "正在导出…" : "导出 Word"}</button></div></section>}
       </>}
     </section>
   </section>;
@@ -1340,6 +1340,6 @@ function PanelHead({ icon, title, sub, action, onClick }: { icon:IconName; title
   return <div className="panel-head"><div><i><Icon name={icon}/></i><span><strong>{title}</strong><small>{sub}</small></span></div>{action && <button onClick={onClick}>{action}<Icon name="arrow" size={14}/></button>}</div>;
 }
 
-function PageTitle({ kicker, title, text }: { kicker:string; title:string; text:string }) {
-  return <div className="page-title"><p>{kicker}</p><h1>{title}</h1><span>{text}</span></div>;
+function PageTitle({ kicker, title, text }: { kicker:string; title:string; text?:string }) {
+  return <div className="page-title"><p>{kicker}</p><h1>{title}</h1>{text && <span>{text}</span>}</div>;
 }

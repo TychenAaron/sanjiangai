@@ -251,7 +251,7 @@ button { cursor: pointer; }
 .writing-editor .large-types button { justify-content: center; padding: 9px 12px; text-align: center; }
 .writing-editor-headings { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(180px, .8fr); gap: 14px; }
 .writing-editor-headings label span, .writing-body-head h3 { display: block; margin-bottom: 6px; color: var(--navy); font-size: 9px; font-weight: 700; }
-.writing-editor-headings input { width: 100%; height: 40px; padding: 0 11px; border: 1px solid #ced9e3; border-radius: 7px; color: var(--ink); font-size: 10px; }
+.writing-editor-headings input, .writing-editor-headings select { width: 100%; height: 40px; padding: 0 11px; border: 1px solid #ced9e3; border-radius: 7px; color: var(--ink); font-size: 10px; background: white; }
 .writing-settings-toggle { margin-top: 13px; padding: 7px 10px; border: 1px solid #cbd6df; border-radius: 7px; background: #f7fafc; color: var(--navy); font-size: 8px; }
 .writing-settings { margin-top: 10px; padding: 14px; border: 1px dashed #cbd6df; border-radius: 8px; background: #fbfcfd; }
 .writing-settings .primary { margin-top: 12px; }
@@ -280,7 +280,7 @@ button { cursor: pointer; }
 .writing-body-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .writing-body-head h3 { margin: 0; font-size: 13px; }
 .writing-body-head span { color: var(--muted); font-size: 8px; }
-.writing-editor-actions { justify-content: flex-start; }
+.writing-editor-actions { justify-content: flex-end; margin-top: 10px; }
 .structured-writing-body { min-height: min(68vh, 900px); }
 .writing-document { min-height: min(62vh, 820px); margin-top: 10px; padding: clamp(24px, 4vw, 56px) clamp(18px, 5vw, 72px); border: 1px solid #cdd8e1; border-radius: 8px; outline: 0; background: #fffefc; color: #24394d; box-shadow: 0 10px 28px rgba(33, 57, 77, .06); font-family: "Noto Serif SC", "Songti SC", serif; font-size: 15px; line-height: 2; }
 .writing-document:focus { border-color: #4f789f; box-shadow: 0 0 0 3px rgba(45,93,145,.07), 0 10px 28px rgba(33, 57, 77, .06); }
