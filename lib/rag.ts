@@ -15,6 +15,7 @@ import { DevD1VectorStore, type VectorStore } from "./vector-store";
 import { fuseRankedEvidence, HYBRID_RETRIEVAL_DEFAULTS, type FusedEvidence } from "./hybrid-fusion";
 import { readEvidenceSelectionConfig, selectTopEvidence } from "./evidence-selection";
 import { readRerankerGatewayConfig, rerankCandidates } from "./reranker-gateway";
+import { expandChineseRetrievalPhrases } from "./chinese-query-expansion";
 
 // 完整标准化问题命中时会额外获得 12 分，因此默认可靠依据门槛也使用 12 分。
 // 这要求候选资料至少包含完整提问，或累积足够多个关键词命中，避免单个弱关键词触发回答。
@@ -84,6 +85,11 @@ function relevance(query: string, content: string) {
     score += term.length >= 4 ? 4 : term.length === 3 ? 2.4 : 1;
   }
   if (haystack.includes(query.toLowerCase().replace(/\s+/g, ""))) score += 12;
+  // 中文制度问题常以不同写法描述同一概念。命中一个已归一化的制度术语即达到可靠门槛，
+  // 但它仍仅是候选排序：正式状态、ACL、D4、当前版本和 Top Evidence 过滤均在此前或后续继续生效。
+  for (const phrase of expandChineseRetrievalPhrases(query)) {
+    if (haystack.includes(phrase)) score += DEFAULT_MIN_RELIABLE_SCORE;
+  }
   return score;
 }
 
