@@ -305,8 +305,40 @@ function Knowledge({ query, setQuery, lastQuestion, result, asking, phase, error
   const [selectedConversationIds, setSelectedConversationIds] = useState<string[]>([]);
   const [conversationNotice, setConversationNotice] = useState("");
   const [deletingConversationIds, setDeletingConversationIds] = useState<string[]>([]);
-  useEffect(() => { if (!conversationId) return; void (async () => { const response = await fetch(`/api/knowledge/conversations/${conversationId}`, { cache: "no-store" }); const data = await response.json() as { messages?: ConversationMessage[] }; if (response.ok) setHistory(data.messages || []); })(); }, [conversationId]);
-  async function createConversation() { const response = await fetch("/api/knowledge/conversations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: "新建会话" }) }); const data = await response.json() as { conversation?: ConversationSummary }; if (response.ok && data.conversation) { setConversationId(data.conversation.id); setHistory([]); setQuery(""); setSearchResults([]); await refreshConversations(); } }
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const shouldFollowMessagesRef = useRef(true);
+
+  /** 读取当前会话的完整持久化消息；每次回答完成后重新读取，避免只显示首尾消息。 */
+  useEffect(() => {
+    if (!conversationId) return;
+    let active = true;
+    void (async () => {
+      const response = await fetch(`/api/knowledge/conversations/${conversationId}`, { cache: "no-store" });
+      const data = await response.json() as { messages?: ConversationMessage[] };
+      if (active && response.ok) setHistory(data.messages || []);
+    })();
+    return () => { active = false; };
+  }, [conversationId, result]);
+
+  // 用户停留在消息底部时自动跟随新消息；主动上滚查看历史后不再强制拉回底部。
+  useEffect(() => {
+    if (shouldFollowMessagesRef.current) messagesEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+  }, [history, asking, error, result]);
+
+  useEffect(() => {
+    const trackPageScroll = () => {
+      shouldFollowMessagesRef.current = window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 56;
+    };
+    trackPageScroll();
+    window.addEventListener("scroll", trackPageScroll, { passive: true });
+    return () => window.removeEventListener("scroll", trackPageScroll);
+  }, []);
+
+  function selectConversation(id: string) {
+    shouldFollowMessagesRef.current = true;
+    setConversationId(id);
+  }
+  async function createConversation() { const response = await fetch("/api/knowledge/conversations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: "新建会话" }) }); const data = await response.json() as { conversation?: ConversationSummary }; if (response.ok && data.conversation) { shouldFollowMessagesRef.current = true; setConversationId(data.conversation.id); setHistory([]); setQuery(""); setSearchResults([]); await refreshConversations(); } }
   /** 逐条软删除当前账号的会话。输入会话 ID，输出成功与失败汇总；每一项独立调用服务端权限控制，不因单项失败隐藏其他成功结果。 */
   async function deleteConversations(ids: string[]) {
     if (ids.length === 0) return;
@@ -358,16 +390,18 @@ function Knowledge({ query, setQuery, lastQuestion, result, asking, phase, error
   return <section className="page knowledge-workspace">
     <PageTitle kicker="知识中枢" title="知识会话" text="通过RAG只依据员工有权查看的正式资料回答，并显示来源、版本和原文片段。"/>
     <div className="retrieval-status"><span><i/>账号权限过滤已启用</span><span><i/>引用溯源已启用</span><span className="waiting"><i/>Qwen3.8-27B等待私有模型网关</span></div>
-    <div className="knowledge-chat-layout"><aside className="conversation-sidebar panel"><div className="conversation-sidebar-actions"><button className="new-conversation" onClick={() => void createConversation()}>＋ 新建会话</button><div className="conversation-bulk-actions"><label><input type="checkbox" checked={conversations.length > 0 && selectedConversationIds.length === conversations.length} onChange={(event) => setSelectedConversationIds(event.target.checked ? conversations.map((item) => item.id) : [])}/> 全选当前列表</label><span>已选 {selectedConversationIds.length} 条</span><button onClick={() => void deleteSelectedConversations()} disabled={selectedConversationIds.length === 0 || deletingConversationIds.length > 0}>批量删除</button></div>{conversationNotice && <p className="conversation-notice" role="status">{conversationNotice}</p>}</div><div className="conversation-list">{conversations.map(item => <div key={item.id} className={conversationId === item.id ? "active" : ""}><input aria-label={`选择会话 ${item.title}`} type="checkbox" checked={selectedConversationIds.includes(item.id)} onChange={(event) => setSelectedConversationIds((current) => event.target.checked ? [...new Set([...current, item.id])] : current.filter((id) => id !== item.id))}/><button className="conversation-select" onClick={() => setConversationId(item.id)} title={item.title}>{item.title}</button><small>{formatDate(item.updatedAt)}</small><button className="conversation-delete" aria-label="删除会话" disabled={deletingConversationIds.includes(item.id)} onClick={() => void deleteConversation(item.id)}>×</button></div>)}</div></aside>
+    <div className="knowledge-chat-layout"><aside className="conversation-sidebar panel"><div className="conversation-sidebar-actions"><button className="new-conversation" onClick={() => void createConversation()}>＋ 新建会话</button><div className="conversation-bulk-actions"><label><input type="checkbox" checked={conversations.length > 0 && selectedConversationIds.length === conversations.length} onChange={(event) => setSelectedConversationIds(event.target.checked ? conversations.map((item) => item.id) : [])}/> 全选当前列表</label><span>已选 {selectedConversationIds.length} 条</span><button onClick={() => void deleteSelectedConversations()} disabled={selectedConversationIds.length === 0 || deletingConversationIds.length > 0}>批量删除</button></div>{conversationNotice && <p className="conversation-notice" role="status">{conversationNotice}</p>}</div><div className="conversation-list">{conversations.map(item => <div key={item.id} className={conversationId === item.id ? "active" : ""}><input aria-label={`选择会话 ${item.title}`} type="checkbox" checked={selectedConversationIds.includes(item.id)} onChange={(event) => setSelectedConversationIds((current) => event.target.checked ? [...new Set([...current, item.id])] : current.filter((id) => id !== item.id))}/><button className="conversation-select" onClick={() => selectConversation(item.id)} title={item.title}>{item.title}</button><small>{formatDate(item.updatedAt)}</small><button className="conversation-delete" aria-label="删除会话" disabled={deletingConversationIds.includes(item.id)} onClick={() => void deleteConversation(item.id)}>×</button></div>)}</div></aside>
     <div className="chat-panel">
       <div className="knowledge-mode"><button className={mode === "answer" ? "active" : ""} onClick={() => setMode("answer")}>智能问答</button><button className={mode === "search" ? "active" : ""} onClick={() => setMode("search")}>资料检索</button></div>
-      {!lastQuestion && !asking && history.length === 0 ? <div className="empty"><i><Icon name="chat" size={30}/></i><h2>您想查询什么？</h2><p>请先上传并审核一份脱敏资料。系统会先核验账号权限，再检索正式知识。</p></div> :
-      <div className="conversation"><div className="question">{lastQuestion}</div>
+      {!asking && !error && history.length === 0 && (!lastQuestion || Boolean(conversationId)) ? <div className="empty"><i><Icon name="chat" size={30}/></i><h2>您想查询什么？</h2><p>请先上传并审核一份脱敏资料。系统会先核验账号权限，再检索正式知识。</p></div> :
+      <div className="conversation">
         {history.map(message => <div className={message.role === "user" ? "question" : "answer"} key={message.id}><i>{message.role === "user" ? "我" : "AI"}</i><div><p>{message.content}</p>{message.role === "assistant" && message.citations.length > 0 && <section><strong>参考依据</strong>{message.citations.map((citation, index) => <small key={`${citation.documentId}-${index}`}>[{index + 1}]《{citation.title}》 · {citation.location}</small>)}</section>}</div></div>)}
+        {(asking || error || (!conversationId && Boolean(lastQuestion))) && <div className="question">{lastQuestion}</div>}
         {asking && <div className="answer loading-answer"><i>AI</i><div><p>{phase === "retrieving" ? "正在检索正式资料…" : "正在整理回答…"}</p></div></div>}
         {error && <div className="answer"><i>!</i><div><p>{error}</p></div></div>}
-          {result && <div className="answer"><i>AI</i><div><div className={`answer-mode ${result.mode}`}>{result.mode === "model" ? "依据问答" : result.mode === "extractive" ? "原文摘录" : result.mode === "failed" ? "回答暂不可用" : "暂无可靠依据"}</div>{result.answer.split("\n").filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+          {!conversationId && result && <div className="answer"><i>AI</i><div><div className={`answer-mode ${result.mode}`}>{result.mode === "model" ? "依据问答" : result.mode === "extractive" ? "原文摘录" : result.mode === "failed" ? "回答暂不可用" : "暂无可靠依据"}</div>{result.answer.split("\n").filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
           {result.citations.length > 0 && <section><strong>参考依据</strong>{result.citations.map((citation, index) => { const key = `${citation.documentId}-${citation.chunkIndex}`; return <article className="citation" key={`${citation.documentId}-${index}`}><button onClick={() => void openCitation(citation)} disabled={previewing === key}>[{index + 1}]《{citation.title}》 · {citation.category} · {citation.sourceOrganization || "来源单位待补充"} · {citation.documentDate || "日期待补充"} · {citation.location}</button>{previewing === key && <p>正在读取片段…</p>}{preview?.key === key && <p>{preview.content}</p>}</article>; })}{previewError && <p>{previewError}</p>}</section>}</div></div>}
+        <div className="conversation-end" ref={messagesEndRef}/>
       </div>}
       {mode === "search" && <div className="search-results">{searchResults.length === 0 ? <p>输入关键词后，仅检索您有权访问的正式资料。</p> : searchResults.map((item, index) => <article className="citation" key={`${item.title}-${index}`}><strong>《{item.title}》 · {item.category}</strong><small>{item.sourceOrganization || "来源单位待补充"} · {item.documentDate || "日期待补充"} · {item.location}</small><p>{item.excerpt}</p></article>)}</div>}
       <form className="chat-input" onSubmit={mode === "answer" ? ask : search}><input value={query} onChange={e => setQuery(e.target.value)} placeholder={mode === "answer" ? "输入问题，按回车发送" : "输入关键词，检索正式资料"}/><button aria-label="发送" disabled={asking || searching}><Icon name="send"/></button></form>
