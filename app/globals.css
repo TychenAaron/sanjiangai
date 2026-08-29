@@ -385,11 +385,15 @@ button { cursor: pointer; }
 .overview-grid .boundary { border-color: #ead7d4; background: #fffafa; }
 .overview-grid .boundary li { display: list-item; margin-left: 15px; color: #865954; list-style: disc; }
 .library-table { overflow: hidden; }
-.table-head, .library-table > button { display: grid; grid-template-columns: 2.5fr .7fr .55fr .8fr .75fr; align-items: center; gap: 10px; width: 100%; padding: 11px 15px; }
-.library-row { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); background: white; }
-.library-row > input { flex: 0 0 auto; width: 16px; height: 16px; margin: auto 0 auto 12px; accent-color: var(--green); }
-.library-row > button { display: grid; flex: 1; grid-template-columns: 2.5fr .7fr .55fr .8fr .75fr; align-items: center; gap: 10px; width: 100%; padding: 11px 15px; border: 0; background: white; color: var(--ink); font-size: 8px; text-align: left; }
-.table-head { background: var(--navy); color: white; font-size: 8px; }
+.table-head { display: grid; grid-template-columns: 35fr 15fr 15fr 10fr 15fr 10fr; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 11px 15px; background: var(--navy); color: white; font-size: 8px; }
+.table-head > span { min-width: 0; }
+.table-head > span:nth-child(n + 3) { justify-self: center; text-align: center; }
+.library-row { position: relative; display: grid; grid-template-columns: minmax(0, 90fr) minmax(78px, 10fr); align-items: center; min-height: 72px; border-bottom: 1px solid var(--line); background: white; }
+.library-row > input { position: absolute; z-index: 1; top: 50%; left: 12px; width: 16px; height: 16px; margin: 0; accent-color: var(--green); transform: translateY(-50%); }
+.library-row > button { display: grid; grid-template-columns: 35fr 15fr 15fr 10fr 15fr; align-items: center; gap: 10px; min-width: 0; min-height: 72px; padding: 11px 15px; border: 0; background: white; color: var(--ink); font-size: 8px; text-align: left; }
+.library-row.has-selection > button > span:first-child { padding-left: 27px; }
+.library-row > button > span { min-width: 0; align-self: center; }
+.library-row > button > span:nth-child(3), .library-row > button > span:nth-child(4), .library-row > button > span:nth-child(5) { justify-self: center; text-align: center; }
 .library-row > button:hover, .library-row > button.selected-row { background: #f5f9f7; }
 .library-row > button > span:first-child { display: flex; align-items: center; gap: 8px; }
 .library-row > button > span:first-child i { display: grid; place-items: center; width: 25px; height: 29px; border-radius: 4px; background: #eaf0f7; color: var(--blue); font-style: normal; }
@@ -397,7 +401,7 @@ button { cursor: pointer; }
 .library-row > button > span:first-child b, .library-row > button > span:first-child small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .library-row > button > span:first-child b { color: var(--ink); font-size: 8px; }
 .library-row > button > span:first-child small { margin-top: 3px; color: var(--muted); font-size: 7px; }
-.library-preview-link { align-self: center; max-width: 150px; margin-right: 12px; padding: 6px 8px; overflow: hidden; border: 1px solid #cbd6df; border-radius: 6px; color: var(--navy); font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.library-preview-link { display: inline-flex; align-items: center; justify-content: center; justify-self: center; min-width: 78px; height: 30px; margin-right: 12px; padding: 0 10px; border: 1px solid #cbd6df; border-radius: 6px; color: var(--navy); font-size: 7px; white-space: nowrap; }
 .library-preview-link:hover { border-color: var(--blue); background: #f3f7fa; }
 .bulk-document-actions { display: flex; align-items: center; gap: 10px; margin: 10px 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: #f8fafb; color: var(--muted); font-size: 8px; }
 .bulk-document-actions label { display: flex; align-items: center; gap: 6px; color: var(--ink); }
@@ -443,7 +447,7 @@ button { cursor: pointer; }
 .confirm-check input { width: 14px; height: 14px; flex: 0 0 auto; margin: 1px 0 0; }
 .confirm-check span { margin: 0 !important; color: #806124 !important; font-size: 8px !important; font-weight: 400 !important; line-height: 1.6; }
 .table-empty { padding: 28px; color: var(--muted); font-size: 9px; text-align: center; }
-.record-status { display: inline-block; padding: 4px 7px; border-radius: 999px; background: #edf2f6; color: var(--muted); font-size: 7px; font-style: normal; }
+.record-status { display: inline-flex; align-items: center; justify-content: center; min-height: 24px; padding: 4px 7px; border-radius: 999px; background: #edf2f6; color: var(--muted); font-size: 7px; font-style: normal; line-height: 1; }
 .record-status.pending { background: #fff3df; color: #9b6618; }
 .record-status.approved { background: #edf6f1; color: var(--green); }
 .record-status.rejected { background: #fff0ef; color: #a44942; }
