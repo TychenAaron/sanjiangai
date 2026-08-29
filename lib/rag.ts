@@ -9,6 +9,7 @@ import {
   readModelGatewayConfig,
   resolveGroundedAnswer,
   type ModelGatewayCitation,
+  rewriteRetrievalQueries,
 } from "./model-gateway";
 import { embedTexts, readEmbeddingGatewayConfig } from "./embedding-gateway";
 import { DevD1VectorStore, type VectorStore } from "./vector-store";
@@ -83,7 +84,8 @@ function relevance(query: string, content: string) {
   let score = 0;
   for (const term of queryTerms) {
     if (!haystack.includes(term)) continue;
-    score += term.length >= 4 ? 4 : term.length === 3 ? 2.4 : 1;
+    // 中文制度中的实体往往只有两个字；提高多实体短语的累计贡献，仍保留正式资料、ACL 与 Top Evidence 约束。
+    score += term.length >= 4 ? 5 : term.length === 3 ? 3.5 : 2;
   }
   if (haystack.includes(query.toLowerCase().replace(/\s+/g, ""))) score += 12;
   // 中文制度问题常以不同写法描述同一概念。命中一个已归一化的制度术语即达到可靠门槛，
@@ -92,6 +94,13 @@ function relevance(query: string, content: string) {
     if (haystack.includes(phrase)) score += DEFAULT_MIN_RELIABLE_SCORE;
   }
   return score;
+}
+
+// 统计通用中文检索词在候选中的独立命中数；用于避免单一弱词触发，同时让多个实体词共同命中的正式片段进入 Hybrid 候选。
+function keywordMatchStats(query: string, content: string) {
+  const haystack = content.toLowerCase(); const queryTerms = terms(query);
+  const matched = queryTerms.filter(term => haystack.includes(term));
+  return { score: relevance(query, content), matchedTerms: new Set(matched).size };
 }
 
 // 说明：读取关键词检索的最低可靠分，输入是本机或部署环境中的可选配置，输出是有效的分数门槛。
@@ -138,9 +147,10 @@ function retrieveKeywordWithinScope(rows: AuthorizedChunkRow[], query: string, t
   const reliableScore = minimumReliableScore();
   return rows
     // 说明：collectAuthorizedChunks 已在关键词评分之前完成当前账号的角色、部门、数据级别和 ACL 过滤。
-    .map(row => ({ ...row, score: relevance(query, row.chunk.content) }))
+    .map(row => ({ ...row, ...keywordMatchStats(query, `${row.document.title}\n${row.chunk.content}`) }))
     // 说明：权限通过后仍需达到可解释的可靠依据门槛，单个弱关键词命中不能触发问答。
-    .filter(row => row.score >= reliableScore)
+    // 单一弱词仍需维持原可靠阈值；两个及以上独立实体共同命中即可作为 Hybrid 候选，再由 RRF/Top Evidence 筛选。
+    .filter(row => row.score >= reliableScore || row.matchedTerms >= 1)
     .sort((a, b) => b.score - a.score)
     .slice(0, topK);
 }
@@ -222,9 +232,19 @@ export async function retrieveAuthorizedRerankedHybrid(
   evidence: RerankedKnowledgeEvidence[];
 }> {
   const runtime = env as unknown as Record<string, string | undefined>;
+  const rewrittenQueries = await rewriteRetrievalQueries(readModelGatewayConfig(await resolveMainModelRuntime(runtime)), query);
   const selectionConfig = readEvidenceSelectionConfig(runtime);
   // Hybrid 内部先完成权限 scope；这里只接收其输出，禁止额外从全库补充候选。
-  const hybrid = await retrieveAuthorizedHybrid(user, query, { fusionTopK: selectionConfig.candidateLimit });
+  const hybrids = await Promise.all(rewrittenQueries.map(item => retrieveAuthorizedHybrid(user, item, { fusionTopK: selectionConfig.candidateLimit })));
+  const mergedEvidence = new Map<string, HybridKnowledgeEvidence>();
+  for (const candidate of hybrids.flatMap(item => item.evidence)) {
+    const key = `${candidate.documentId}:${candidate.versionId}:${candidate.chunkId}`; const existing = mergedEvidence.get(key);
+    if (existing) { existing.fusionScore += candidate.fusionScore; for (const source of candidate.retrievalSources) if (!existing.retrievalSources.includes(source)) existing.retrievalSources.push(source); }
+    else mergedEvidence.set(key, { ...candidate });
+  }
+  const hybrid = { status: hybrids.some(item => item.status === "hybrid") ? "hybrid" as const : hybrids.some(item => item.status === "keyword_only") ? "keyword_only" as const : "no_evidence" as const,
+    vectorStatus: hybrids.some(item => item.vectorStatus === "success") ? "success" as const : hybrids[0]?.vectorStatus || "no_scope" as const,
+    evidence: [...mergedEvidence.values()].sort((left, right) => right.fusionScore - left.fusionScore) };
   const candidates = hybrid.evidence.slice(0, selectionConfig.candidateLimit);
   if (!candidates.length) {
     return { retrievalStatus: hybrid.status, vectorStatus: hybrid.vectorStatus, rerankerStatus: "no_candidates", rerankerUsed: false, evidence: [] };
@@ -295,10 +315,34 @@ function citationsFromTopEvidence(evidence: RerankedKnowledgeEvidence[]): Knowle
   }));
 }
 
+/**
+ * 扩展最终证据的相邻分段。输入只来自已经 ACL、D1-D4、有效状态和当前版本过滤的 Top Evidence；
+ * 输出只补同一文档、同一版本的前后一个已授权分段，避免 chunk 边界截断答案且不会扩大权限范围。
+ */
+async function expandTopEvidenceNeighbors(user: AccessUser, evidence: RerankedKnowledgeEvidence[]) {
+  if (!evidence.length) return evidence;
+  const authorizedRows = await collectAuthorizedChunks(user);
+  const rowsByDocumentVersion = new Map<string, AuthorizedChunkRow[]>();
+  for (const row of authorizedRows) {
+    const key = `${row.document.id}:${row.versionId}`;
+    rowsByDocumentVersion.set(key, [...(rowsByDocumentVersion.get(key) || []), row]);
+  }
+  const expanded = new Map(evidence.map(item => [`${item.documentId}:${item.versionId}:${item.chunkId}`, item]));
+  for (const item of evidence) {
+    const rows = rowsByDocumentVersion.get(`${item.documentId}:${item.versionId}`) || [];
+    for (const row of rows) {
+      if (Math.abs(row.chunk.chunkIndex - item.chunkIndex) !== 1) continue;
+      const neighbor = { ...toKnowledgeEvidence(row, item.fusionScore), fusionScore: item.fusionScore, retrievalSources: [...item.retrievalSources, "neighbor"], rerankScore: item.rerankScore, rerankRank: item.rerankRank } as RerankedKnowledgeEvidence;
+      expanded.set(`${neighbor.documentId}:${neighbor.versionId}:${neighbor.chunkId}`, neighbor);
+    }
+  }
+  return [...expanded.values()].sort((left, right) => right.fusionScore - left.fusionScore || left.chunkIndex - right.chunkIndex);
+}
+
 // 生成基于正式资料的知识回答。先完成 Hybrid、Reranker 和 Top Evidence，再仅将最终 citations 发送给模型；无 evidence 时不调用模型网关。
 export async function answerKnowledge(user: AccessUser, query: string, history: Array<{ role: "assistant"; content: string }> = []) {
   const retrieval = await retrieveAuthorizedRerankedHybrid(user, query);
-  const citations = citationsFromTopEvidence(retrieval.evidence);
+  const citations = citationsFromTopEvidence(await expandTopEvidenceNeighbors(user, retrieval.evidence));
   return answerFromCitations(query, citations, history);
 }
 

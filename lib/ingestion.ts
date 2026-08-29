@@ -5,6 +5,8 @@ import { documentChunks } from "../db/schema";
 import { parseWritingReference } from "./writing-reference-parser";
 
 const MAX_EXTRACTED_CHARS = 600_000;
+const CHUNK_MAX_CHARS = 520;
+const LONG_PARAGRAPH_PIECE_CHARS = 420;
 
 function decodeXml(value: string) {
   return value
@@ -62,12 +64,17 @@ export function splitIntoChunks(input: string) {
   const paragraphs = text.split(/\n+/).map(item => item.trim()).filter(Boolean);
   const chunks: string[] = [];
   let current = "";
+  let latestHeading = "";
   for (const paragraph of paragraphs) {
-    const pieces = paragraph.length > 900 ? paragraph.match(/[\s\S]{1,780}/g) || [] : [paragraph];
+    // 记录最近章节标题并写入后续切片，让标题语义与跨边界正文一起进入关键词和向量检索。
+    const heading = paragraph.match(/(?:[一二三四五六七八九十]+、|\d+(?:\.\d+)*\s+)[^。；\n]{2,48}/u)?.[0]?.trim();
+    if (heading) latestHeading = heading;
+    // 长段落按模型上下文摘要上限切分，避免命中的制度事实落在 chunk 摘要之外而无法进入 grounded answer。
+    const pieces = paragraph.length > CHUNK_MAX_CHARS ? paragraph.match(new RegExp(`[\\s\\S]{1,${LONG_PARAGRAPH_PIECE_CHARS}}`, "g")) || [] : [paragraph];
     for (const piece of pieces) {
-      if (current && current.length + piece.length + 1 > 900) {
+      if (current && current.length + piece.length + 1 > CHUNK_MAX_CHARS) {
         chunks.push(current);
-        current = `${current.slice(-100)}\n${piece}`;
+        current = `${latestHeading ? `章节：${latestHeading}\n` : ""}${current.slice(-100)}\n${piece}`;
       } else current = current ? `${current}\n${piece}` : piece;
     }
   }
@@ -81,9 +88,11 @@ export async function indexDocumentVersion(documentId: string, versionId: string
   await db.delete(documentChunks).where(eq(documentChunks.versionId, versionId));
   if (chunks.length) {
     const now = new Date().toISOString();
-    await db.insert(documentChunks).values(chunks.map((chunk, chunkIndex) => ({
+    const rows = chunks.map((chunk, chunkIndex) => ({
       id: crypto.randomUUID(), documentId, versionId, chunkIndex, content: chunk, charCount: chunk.length, createdAt: now,
-    })));
+    }));
+    // D1 对单条批量 SQL 的绑定参数数量有限。输入为同一 document version 的完整分段，输出为逐批写入的 chunks；避免长文重建时中途失败。
+    for (let offset = 0; offset < rows.length; offset += 12) await db.insert(documentChunks).values(rows.slice(offset, offset + 12));
   }
   return chunks.length;
 }

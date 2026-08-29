@@ -126,6 +126,23 @@ export async function callModelGateway(
   }
 }
 
+/** 使用主模型将自然语言问题改写为最多四条检索表达；失败时只保留原问题，绝不注入业务词典或编造资料事实。 */
+export async function rewriteRetrievalQueries(config: ModelGatewayConfig, query: string, gatewayFetch: GatewayFetch = fetch) {
+  if (!config.configured || !query.trim()) return [query];
+  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+  try {
+    const response = await gatewayFetch(`${config.baseUrl}/chat/completions`, { method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json", ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}) }, body: JSON.stringify({ model: config.model, temperature: 0, max_tokens: 160, messages: [{ role: "system", content: "你是检索查询改写器。只输出 JSON 数组，包含原问题的2至4种不超过30字的同义检索表达；不得回答问题、不得补充事实、不得输出解释。" }, { role: "user", content: query }] }) });
+    const data = response.ok ? await response.json() as { choices?: Array<{ message?: { content?: unknown } }> } : null;
+    const text = typeof data?.choices?.[0]?.message?.content === "string" ? data.choices[0].message.content.trim() : "";
+    const match = text.match(/\[[\s\S]*\]/); let parsed: unknown = [];
+    try { parsed = match ? JSON.parse(match[0]) : []; } catch { parsed = []; }
+    // 本地模型偶尔会省略 JSON 围栏；仅把明确的列表行当作检索表达，不从自然语言答案猜测或补造事实。
+    const rewrites = Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string" && item.trim().length > 1).map(item => item.trim()).slice(0, 4)
+      : text.split(/\r?\n/).map(item => item.replace(/^[-*\d.、\s]+/, "").trim()).filter(item => item.length > 1 && item.length <= 30).slice(0, 4);
+    return [...new Set([query, ...rewrites])].slice(0, 5);
+  } catch { return [query]; } finally { clearTimeout(timer); }
+}
+
 // 说明：根据已授权 citations 决定最终模式，输入是可靠引用、网关配置和可替换 fetch，输出是安全问答结果。
 // 没有可靠引用时绝不触发网关；网关失败或超时时只返回真实引用的原文摘录，不展示失败模型文本。
 export async function resolveGroundedAnswer(

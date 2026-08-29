@@ -31,7 +31,11 @@ export async function saveConversationExchange(conversationId: string, question:
     { id: userMessageId, conversationId, role: "user", content: question, mode, createdAt: now },
     { id: assistantMessageId, conversationId, role: "assistant", content: answer, mode, errorStatus: errorStatus || null, createdAt: now },
   ]);
-  if (citations.length) await db.insert(knowledgeMessageCitations).values(citations.map((citation) => ({ id: crypto.randomUUID(), messageId: assistantMessageId, documentId: citation.documentId, versionId: citation.versionId, chunkIndex: citation.chunkIndex, title: citation.title, category: citation.category, sourceOrganization: citation.sourceOrganization, documentDate: citation.documentDate, location: citation.location, createdAt: now })));
+  if (citations.length) {
+    // D1 对单条批量写入的绑定参数数量有限。输入为本次回答的 citation 元数据，输出为全部已保存的引用快照；分批不会读取或写入资料正文。
+    const snapshots = citations.map((citation) => ({ id: crypto.randomUUID(), messageId: assistantMessageId, documentId: citation.documentId, versionId: citation.versionId, chunkIndex: citation.chunkIndex, title: citation.title, category: citation.category, sourceOrganization: citation.sourceOrganization, documentDate: citation.documentDate, location: citation.location, createdAt: now }));
+    for (let offset = 0; offset < snapshots.length; offset += 8) await db.insert(knowledgeMessageCitations).values(snapshots.slice(offset, offset + 8));
+  }
   await db.update(knowledgeConversations).set({ updatedAt: now }).where(eq(knowledgeConversations.id, conversationId));
   return assistantMessageId;
 }

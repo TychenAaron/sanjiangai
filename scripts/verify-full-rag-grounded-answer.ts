@@ -89,9 +89,10 @@ const [ragSource, askSource, conversationsSource] = await Promise.all([
 ]);
 for (const required of [
   "const retrieval = await retrieveAuthorizedRerankedHybrid(user, query)",
-  "const citations = citationsFromTopEvidence(retrieval.evidence)",
+  "const citations = citationsFromTopEvidence(await expandTopEvidenceNeighbors(user, retrieval.evidence))",
+  "const authorizedRows = await collectAuthorizedChunks(user)",
   "return answerFromCitations(query, citations, history)",
-  "const hybrid = await retrieveAuthorizedHybrid(user, query",
+  "retrieveAuthorizedHybrid(user, item",
   "candidates.map((candidate) => ({ text: candidate.excerpt }))",
   "document.securityLevel !== \"D4\"",
   "document.currentVersion === versionNo",
