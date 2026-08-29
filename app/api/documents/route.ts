@@ -18,7 +18,12 @@ export async function GET(request: Request) {
     const rows = allRows.filter(document => canReadDocument(user, document, grants));
     const summary = { total: rows.length, pending: rows.filter(x => x.knowledgeStatus === "pending").length,
       approved: rows.filter(x => x.knowledgeStatus === "approved").length, draft: rows.filter(x => x.knowledgeStatus === "draft").length };
-    return Response.json({ documents: rows.slice(0, 100), summary });
+    // 列表仅返回资料管理所需元数据；私有 R2 storageKey 只能由受控文件代理在服务端使用，不能下发浏览器。
+    return Response.json({ documents: rows.slice(0, 100).map((document) => {
+      const visibleDocument = { ...document };
+      delete visibleDocument.storageKey;
+      return visibleDocument;
+    }), summary });
   } catch (error) { return accessError(error, "读取资料失败"); }
 }
 
