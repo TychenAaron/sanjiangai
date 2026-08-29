@@ -481,6 +481,20 @@ button { cursor: pointer; }
 .admin-grid em { padding: 4px 7px; border-radius: 999px; background: #edf5f1; color: var(--green); font-size: 7px; font-style: normal; }
 .admin-grid svg { color: #8c9baa; }
 .admin-notice { margin-top: 14px; }
+.oa-connector-panel { margin-top: 16px; padding: 22px; }
+.oa-connector-section { margin-top: 16px; padding: 16px; border: 1px solid #dfe7ed; border-radius: 9px; background: #f9fbfc; }
+.oa-connector-section h3 { margin: 0 0 12px; color: var(--navy); font-size: 10px; }
+.oa-connector-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px 14px; align-items: end; }
+.oa-connector-form label { min-width: 0; }
+.oa-connector-form label > span { display: block; margin-bottom: 6px; color: var(--navy); font-size: 8px; font-weight: 700; }
+.oa-connector-form input, .oa-connector-form select { box-sizing: border-box; width: 100%; height: 38px; padding: 0 10px; border: 1px solid #c8d5df; border-radius: 7px; outline: none; background: #fff; color: var(--ink); font-size: 9px; }
+.oa-connector-form input:focus, .oa-connector-form select:focus { border-color: #527b9e; box-shadow: 0 0 0 3px rgba(64, 108, 147, .1); }
+.oa-credential-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.oa-save-action { display: flex; align-items: end; min-height: 59px; }
+.oa-save-action button { width: 100%; height: 38px; border: 0; border-radius: 7px; background: var(--navy); color: #fff; font-size: 9px; font-weight: 700; }
+.oa-save-action button:disabled { cursor: wait; opacity: .65; }
+.oa-connector-list { margin-top: 16px; }
+.oa-connector-list > div, .oa-connector-list article { grid-template-columns: minmax(140px, 1.3fr) minmax(90px, .85fr) minmax(70px, .6fr) minmax(110px, .9fr) minmax(105px, .9fr) minmax(145px, 1fr); }
 .upload-control-panel { margin-top: 13px; padding: 18px; }
 .control-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .control-head h2 { margin: 0; color: var(--navy); font-size: 12px; }
@@ -621,6 +635,7 @@ button { cursor: pointer; }
   .account-form { grid-template-columns: repeat(2,1fr); }
   .local-test-actions, .local-test-levels { grid-template-columns: repeat(2,1fr); }
   .rule-form { grid-template-columns: repeat(2,1fr); }
+  .oa-connector-form, .oa-credential-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .watch-sites { display: none; }
 }
 
@@ -639,6 +654,7 @@ button { cursor: pointer; }
   .quick { overflow-x: auto; flex-wrap: nowrap; }
   .quick button { flex: 0 0 auto; }
   .doc-types, .large-types, .extensions > div:last-child, .policy-strip, .admin-grid, .form-grid, .capability-row, .resource-capabilities, .overview-grid, .architecture-flow, .ai-tool-grid, .writing-fields, .writing-placeholder > div { grid-template-columns: 1fr; }
+  .oa-connector-form, .oa-credential-form { grid-template-columns: 1fr; }
   .writing-editor-headings { grid-template-columns: 1fr; }
   .writing-fields label:nth-child(2) { grid-column: auto; }
   .writing-modes { display: grid; grid-template-columns: repeat(2,1fr); gap: 4px; }
