@@ -310,6 +310,7 @@ function Knowledge({ query, setQuery, lastQuestion, result, asking, phase, error
   const [conversationNotice, setConversationNotice] = useState("");
   const [deletingConversationIds, setDeletingConversationIds] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const shouldFollowMessagesRef = useRef(true);
 
   /** 读取当前会话的完整持久化消息；每次回答完成后重新读取，避免只显示首尾消息。 */
@@ -326,17 +327,16 @@ function Knowledge({ query, setQuery, lastQuestion, result, asking, phase, error
 
   // 用户停留在消息底部时自动跟随新消息；主动上滚查看历史后不再强制拉回底部。
   useEffect(() => {
-    if (shouldFollowMessagesRef.current) messagesEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+    const container = messagesScrollRef.current;
+    if (shouldFollowMessagesRef.current && container) container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
   }, [history, asking, error, result]);
 
-  useEffect(() => {
-    const trackPageScroll = () => {
-      shouldFollowMessagesRef.current = window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 56;
-    };
-    trackPageScroll();
-    window.addEventListener("scroll", trackPageScroll, { passive: true });
-    return () => window.removeEventListener("scroll", trackPageScroll);
-  }, []);
+  // 说明：只根据聊天白框内部滚动位置决定是否自动跟随，避免消息增加时把整个页面反复拉到底部。
+  function trackMessageScroll() {
+    const container = messagesScrollRef.current;
+    if (!container) return;
+    shouldFollowMessagesRef.current = container.scrollHeight - container.scrollTop - container.clientHeight < 56;
+  }
 
   function selectConversation(id: string) {
     shouldFollowMessagesRef.current = true;
@@ -397,7 +397,7 @@ function Knowledge({ query, setQuery, lastQuestion, result, asking, phase, error
     <div className="knowledge-chat-layout"><aside className="conversation-sidebar panel"><div className="conversation-sidebar-actions"><button className="new-conversation" onClick={() => void createConversation()}>＋ 新建会话</button><div className="conversation-bulk-actions"><label><input type="checkbox" checked={conversations.length > 0 && selectedConversationIds.length === conversations.length} onChange={(event) => setSelectedConversationIds(event.target.checked ? conversations.map((item) => item.id) : [])}/> 全选当前列表</label><span>已选 {selectedConversationIds.length} 条</span><button onClick={() => void deleteSelectedConversations()} disabled={selectedConversationIds.length === 0 || deletingConversationIds.length > 0}>批量删除</button></div>{conversationNotice && <p className="conversation-notice" role="status">{conversationNotice}</p>}</div><div className="conversation-list">{conversations.map(item => <div key={item.id} className={conversationId === item.id ? "active" : ""}><input aria-label={`选择会话 ${item.title}`} type="checkbox" checked={selectedConversationIds.includes(item.id)} onChange={(event) => setSelectedConversationIds((current) => event.target.checked ? [...new Set([...current, item.id])] : current.filter((id) => id !== item.id))}/><button className="conversation-select" onClick={() => selectConversation(item.id)} title={item.title}>{item.title}</button><small>{formatDate(item.updatedAt)}</small><button className="conversation-delete" aria-label="删除会话" disabled={deletingConversationIds.includes(item.id)} onClick={() => void deleteConversation(item.id)}>×</button></div>)}</div></aside>
     <div className="chat-panel">
       <div className="knowledge-mode"><button className={mode === "answer" ? "active" : ""} onClick={() => setMode("answer")}>智能问答</button><button className={mode === "search" ? "active" : ""} onClick={() => setMode("search")}>资料检索</button></div>
-      {!asking && !error && history.length === 0 && (!lastQuestion || Boolean(conversationId)) ? <div className="empty"><i><Icon name="chat" size={30}/></i><h2>您想查询什么？</h2><p>请先上传并审核一份脱敏资料。系统会先核验账号权限，再检索正式知识。</p></div> :
+      <div className="chat-content-scroll" ref={messagesScrollRef} onScroll={trackMessageScroll}>{!asking && !error && history.length === 0 && (!lastQuestion || Boolean(conversationId)) ? <div className="empty"><i><Icon name="chat" size={30}/></i><h2>您想查询什么？</h2><p>请先上传并审核一份脱敏资料。系统会先核验账号权限，再检索正式知识。</p></div> :
       <div className="conversation">
         {history.map(message => <div className={message.role === "user" ? "question" : "answer"} key={message.id}><i>{message.role === "user" ? "我" : "AI"}</i><div><p>{message.content}</p>{message.role === "assistant" && message.citations.length > 0 && <section><strong>参考依据</strong>{message.citations.map((citation, index) => <small key={`${citation.documentId}-${index}`}>[{index + 1}]《{citation.title}》 · {citation.location}</small>)}</section>}</div></div>)}
         {(asking || error || (!conversationId && Boolean(lastQuestion))) && <div className="question">{lastQuestion}</div>}
@@ -408,6 +408,7 @@ function Knowledge({ query, setQuery, lastQuestion, result, asking, phase, error
         <div className="conversation-end" ref={messagesEndRef}/>
       </div>}
       {mode === "search" && <div className="search-results">{searchResults.length === 0 ? <p>输入关键词后，仅检索您有权访问的正式资料。</p> : searchResults.map((item, index) => <article className="citation" key={`${item.title}-${index}`}><strong>《{item.title}》 · {item.category}</strong><small>{item.sourceOrganization || "来源单位待补充"} · {item.documentDate || "日期待补充"} · {item.location}</small><p>{item.excerpt}</p></article>)}</div>}
+      </div>
       <form className="chat-input" onSubmit={mode === "answer" ? ask : search}><input value={query} onChange={e => setQuery(e.target.value)} placeholder={mode === "answer" ? "输入问题，按回车发送" : "输入关键词，检索正式资料"}/><button aria-label="发送" disabled={asking || searching}><Icon name="send"/></button></form>
     </div></div>
   </section>;
