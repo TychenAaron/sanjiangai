@@ -16,6 +16,7 @@ import { fuseRankedEvidence, HYBRID_RETRIEVAL_DEFAULTS, type FusedEvidence } fro
 import { readEvidenceSelectionConfig, selectTopEvidence } from "./evidence-selection";
 import { readRerankerGatewayConfig, rerankCandidates } from "./reranker-gateway";
 import { expandChineseRetrievalPhrases } from "./chinese-query-expansion";
+import { resolveMainModelRuntime, resolveRetrievalModelRuntime } from "./runtime-model-config";
 
 // 完整标准化问题命中时会额外获得 12 分，因此默认可靠依据门槛也使用 12 分。
 // 这要求候选资料至少包含完整提问，或累积足够多个关键词命中，避免单个弱关键词触发回答。
@@ -166,7 +167,7 @@ async function retrieveVectorWithinScope(
 ): Promise<{ status: "success" | "no_scope" | "not_configured" | "timeout" | "gateway_error" | "invalid_response"; evidence: VectorKnowledgeEvidence[] }> {
   if (!scopedRows.length) return { status: "no_scope", evidence: [] };
 
-  const config = readEmbeddingGatewayConfig(env as unknown as Record<string, string | undefined>);
+  const config = readEmbeddingGatewayConfig(await resolveRetrievalModelRuntime(env as unknown as Record<string, string | undefined>, "EMBEDDING"));
   const embedding = await embedTexts(config, [query]);
   if (embedding.status !== "success") return { status: embedding.status, evidence: [] };
 
@@ -230,7 +231,7 @@ export async function retrieveAuthorizedRerankedHybrid(
   }
 
   const reranker = await rerankCandidates(
-    readRerankerGatewayConfig(runtime),
+    readRerankerGatewayConfig(await resolveRetrievalModelRuntime(runtime, "RERANKER")),
     query,
     candidates.map((candidate) => ({ text: candidate.excerpt })),
   );
@@ -262,7 +263,7 @@ export async function retrieveAuthorizedRerankedHybrid(
 // 说明：以真实 citations 生成最终问答模式，输入是已经完成权限与可靠依据筛选的引用，输出是 no_basis、extractive 或 model。
 // 没有引用时绝不调用网关；网关超时、异常或引用不合格时不展示模型文本，而是安全回退到原文摘录。
 export async function answerFromCitations(query: string, citations: KnowledgeCitation[], history: Array<{ role: "assistant"; content: string }> = []) {
-  const config = readModelGatewayConfig(env as unknown as Record<string, string | undefined>);
+  const config = readModelGatewayConfig(await resolveMainModelRuntime(env as unknown as Record<string, string | undefined>));
   if (!citations.length) return { answer: "当前无可引用的正式资料，建议补充或检索已批准知识资源。", mode: "no_basis" as const, model: config.model, citations };
   const modelCitations: ModelGatewayCitation[] = citations.map(({ title, version, sourceType, location, excerpt }) => ({ title, version, sourceType, location, excerpt }));
   // 已配置的模型出现传输、超时或空响应时不回退成模型外推内容，仅保留已授权引用供用户核对。
@@ -301,6 +302,6 @@ export async function answerKnowledge(user: AccessUser, query: string, history: 
   return answerFromCitations(query, citations, history);
 }
 
-export function modelGatewayStatus() {
-  return publicModelGatewayStatus(readModelGatewayConfig(env as unknown as Record<string, string | undefined>));
+export async function modelGatewayStatus() {
+  return publicModelGatewayStatus(readModelGatewayConfig(await resolveMainModelRuntime(env as unknown as Record<string, string | undefined>)));
 }

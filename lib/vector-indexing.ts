@@ -5,6 +5,7 @@ import { getDb } from "../db";
 import { documentChunks } from "../db/schema";
 import { embedTexts, readEmbeddingGatewayConfig, type EmbeddingRuntime } from "./embedding-gateway";
 import { DevD1VectorStore, type VectorStore } from "./vector-store";
+import { resolveRetrievalModelRuntime } from "./runtime-model-config";
 
 export type VectorIndexResult = {
   status: "ready" | "pending" | "failed";
@@ -21,7 +22,7 @@ export async function indexApprovedDocumentVersion(
   runtime: EmbeddingRuntime = env as unknown as EmbeddingRuntime,
   store: VectorStore = new DevD1VectorStore(),
 ): Promise<VectorIndexResult> {
-  const config = readEmbeddingGatewayConfig(runtime);
+  const config = readEmbeddingGatewayConfig(await resolveRetrievalModelRuntime(runtime, "EMBEDDING"));
   // 新版审批或重复审批前先移除同一资料的旧向量，确保旧版本永远不能继续作为 current evidence。
   await store.deleteDocumentVectors(documentId);
   if (!config.configured) return { status: "pending", count: 0, reason: "not_configured" };

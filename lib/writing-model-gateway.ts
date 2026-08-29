@@ -65,7 +65,8 @@ export function readWritingModelConfig(runtime: WritingModelRuntime): WritingMod
     ? configuredTimeout : DEFAULT_TIMEOUT_MS;
   return {
     enabled,
-    configured: Boolean(baseUrl && runtime.AI_GATEWAY_API_KEY?.trim()),
+    // 本地 OpenAI-compatible 部署可不要求 API Key；是否启用仍由 AI_MODEL_ENABLED 和 Base URL 共同控制。
+    configured: Boolean(baseUrl),
     baseUrl,
     apiKey: runtime.AI_GATEWAY_API_KEY?.trim() || "",
     model: runtime.AI_WRITING_MODEL?.trim() || DEFAULT_MODEL,

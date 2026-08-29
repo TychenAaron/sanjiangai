@@ -18,7 +18,9 @@ type BlockedTerm = { id: string; term: string; category: string; matchScope: str
 type DocumentVersion = { id: string; versionNo: number; content: string; changeSummary: string; versionStatus: string; createdBy: string; createdAt: string };
 type BatchUploadSummary = { total: number; succeeded: number; failed: Array<{ fileName: string; reason: string }> };
 type BatchFileStatus = { fileName: string; size: number; type: string; status: "待预检" | "上传中" | "成功" | "跳过" | "失败"; reason?: string };
-type KnowledgeImportBatch = { id: string; datasetName: string; totalCount: number; successCount: number; failedCount: number; skippedCount: number; status: string; createdAt: string; completedAt: string | null };
+type KnowledgeImportBatch = { id: string; datasetName: string; uploader: string; totalCount: number; successCount: number; failedCount: number; skippedCount: number; status: string; createdAt: string; completedAt: string | null };
+type ModelConnectorRecord = { id: string; purpose: "MAIN_MODEL" | "EMBEDDING" | "RERANKER"; baseUrl: string; model: string; timeoutMs: number; endpointPath: string | null; enabled: boolean; hasCredentials: boolean; lastCheckStatus: string | null; lastCheckHttpStatus: number | null; lastCheckDurationMs: number | null; lastCheckedAt: string | null };
+const MODEL_CONNECTOR_SPECS = [{ purpose: "MAIN_MODEL", label: "主模型（知识问答与智能写作）", path: false }, { purpose: "EMBEDDING", label: "Embedding", path: false }, { purpose: "RERANKER", label: "Reranker", path: true }] as const;
 type SessionUser = { id: string; name: string; email: string; employeeNo: string | null; departmentName: string; role: string; positionLevel: number; clearanceLevel: number; status: string };
 type KnowledgeResult = {
   answer: string;
@@ -798,7 +800,6 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
   const [batchUploadSummary, setBatchUploadSummary] = useState<BatchUploadSummary | null>(null);
   const [batchDatasetName, setBatchDatasetName] = useState("LOCAL_TRIAL_20260828");
   const [batchFileStatuses, setBatchFileStatuses] = useState<BatchFileStatus[]>([]);
-  const [importBatches, setImportBatches] = useState<KnowledgeImportBatch[]>([]);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
   const [selected, setSelected] = useState<DocumentRecord | null>(null);
@@ -816,11 +817,6 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
 
   function setField(name: string, value: string) { setForm(previous => ({ ...previous, [name]: value })); }
   const canManageLibrary = Boolean(user && ["reviewer", "knowledge_admin", "system_admin"].includes(user.role));
-  const loadImportBatches = useCallback(async () => {
-    if (!canManageLibrary) return;
-    const response = await fetch("/api/knowledge-import-batches?pageSize=10", { cache: "no-store" });
-    if (response.ok) { const result = await response.json() as { batches?: KnowledgeImportBatch[] }; setImportBatches(result.batches || []); }
-  }, [canManageLibrary]);
   const visibleRecords = records.filter((record) =>
     (statusFilter === "all" || record.resourceStatus === statusFilter) &&
     (categoryFilter === "all" || record.resourceCategory === categoryFilter) &&
@@ -916,7 +912,6 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
       setUploadFiles([]); setForm({ ...form, title: "", content: "", confirmedDesensitized: false });
       setNotice(`本批共处理 ${uploadFiles.length} 份：成功 ${succeeded} 份，失败 ${failed.length} 份。解析成功的文件已自动成为正式资料。`);
       await refresh();
-      await loadImportBatches();
     } catch (error) { setNotice(error instanceof Error ? error.message : "上传失败"); }
     finally { setSaving(false); }
   }
@@ -962,7 +957,6 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
     <div className="data-flow"><div><b>01</b><strong>原始资料层</strong><span>OA原文、政府网页、人工录入</span></div><i>→</i><div><b>02</b><strong>加工与草稿层</strong><span>解析文本、AI草稿、人工修改稿</span></div><i>→</i><div><b>03</b><strong>正式知识层</strong><span>经审核的现行文件和最终定稿</span></div></div>
     <div className="library-actions"><div><strong>资料台账</strong><span>共 {records.length} 份真实记录</span></div>{canManageLibrary && <button onClick={() => setAdding(!adding)}>{adding ? "取消导入" : "＋ 集团资料批量导入"}</button>}</div>
     {notice && <div className="notice">{notice}</div>}
-    {canManageLibrary && importBatches.length > 0 && <section className="panel import-batch-history"><div><strong>最近资料导入批次</strong><span>每个批次和逐文件结果均已持久化，可用于核对导入数量与失败原因。</span></div>{importBatches.map(batch => <article key={batch.id}><b title={batch.datasetName}>{batch.datasetName}</b><span>{batch.totalCount} 份 · 成功 {batch.successCount} · 失败 {batch.failedCount} · 跳过 {batch.skippedCount}</span><em className={`record-status ${batch.status}`}>{batch.status === "completed" ? "已完成" : "处理中"}</em></article>)}</section>}
     {adding && <div className="panel ingest-form">
       <div className="trial-rule"><Icon name="shield" size={18}/><div><strong>当前为试用数据入口</strong><span>只允许公开资料、内部脱敏测试资料和部门隔离测试资料；真实敏感资料与禁止项不得上传。</span></div></div>
       <div className="ingest-mode"><button className={ingestMode === "file" ? "active" : ""} onClick={() => setIngestMode("file")}>上传文件</button><button className={ingestMode === "text" ? "active" : ""} onClick={() => setIngestMode("text")}>粘贴正文</button><span>{ingestMode === "file" ? "支持 DOCX、PDF、TXT、MD、XLSX、XLS、PPTX、PPT；XLS/PPT 可安全保存并按状态继续处理。" : "适合快速粘贴一小段脱敏制度进行测试。"}</span></div>
@@ -1080,6 +1074,8 @@ function Admin({ user, records, summary, refresh }: { user: SessionUser | null; 
       ["扩展模块管理","财务、运营、采购、供应链和项目管理","仅预留接口"],
     ].map(x => <button className="panel" key={x[0]}><span><strong>{x[0]}</strong><small>{x[1]}</small></span><em>{x[2]}</em><Icon name="arrow" size={17}/></button>)}</div>
     {message && <div className="notice admin-notice">{message}</div>}
+    <ImportBatchLedgerAdmin canManage={Boolean(user && ["reviewer", "knowledge_admin", "system_admin"].includes(user.role))}/>
+    <ModelConnectorAdmin isSystemAdmin={user?.role === "system_admin"}/>
     <OaConnectorAdmin isSystemAdmin={user?.role === "system_admin"}/>
     <WritingRecipientOptionsAdmin isSystemAdmin={user?.role === "system_admin"}/>
     {canManageRules && <section className="panel upload-control-panel"><div className="control-head"><div><h2>禁止上传词条库</h2><p>命中规则时，系统在保存原文件之前拒绝上传，并记录操作账号、文件名和命中词条。</p></div><b>{blockedTerms.filter(item => item.enabled).length}条生效中</b></div>
@@ -1094,6 +1090,44 @@ function Admin({ user, records, summary, refresh }: { user: SessionUser | null; 
       <section className="panel audit-panel"><h2>最近审计记录</h2><p>关键操作自动记录操作人、对象和时间。</p>{logs.length === 0 ? <div className="queue-empty">暂无操作记录</div> : logs.slice(0,8).map(log => <article key={log.id}><i/><div><strong>{log.action} · {log.operator}</strong><span>{log.detail}</span><small>{formatDate(log.createdAt)}</small></div></article>)}</section>
     </div>
   </section>;
+}
+
+function ImportBatchLedgerAdmin({ canManage }: { canManage: boolean }) {
+  const [batches, setBatches] = useState<KnowledgeImportBatch[]>([]);
+  const [details, setDetails] = useState<Record<string, Array<{ fileName: string; status: string; reason: string | null }>>>({});
+  const [message, setMessage] = useState("");
+  const load = useCallback(async () => {
+    if (!canManage) return;
+    const response = await fetch("/api/knowledge-import-batches?pageSize=20", { cache: "no-store" }); const data = await response.json() as { batches?: KnowledgeImportBatch[]; error?: string };
+    if (response.ok) setBatches(data.batches || []); else setMessage(data.error || "读取资料台账失败");
+  }, [canManage]);
+  useEffect(() => { const timer = window.setTimeout(() => { void load(); }, 0); return () => window.clearTimeout(timer); }, [load]);
+  async function toggleDetails(id: string) {
+    if (details[id]) { setDetails(previous => { const next = { ...previous }; delete next[id]; return next; }); return; }
+    const response = await fetch(`/api/knowledge-import-batches/${id}`, { cache: "no-store" }); const data = await response.json() as { items?: Array<{ fileName: string; status: string; reason: string | null }>; error?: string };
+    if (!response.ok) { setMessage(data.error || "读取批次明细失败"); return; }
+    setDetails(previous => ({ ...previous, [id]: data.items || [] }));
+  }
+  if (!canManage) return null;
+  return <section className="panel import-batch-history"><div><strong>资料导入管理</strong><span>批次、上传人和逐文件结果均在此处核对；不会暴露文件正文或底层存储地址。</span></div>{message && <p>{message}</p>}{batches.length === 0 ? <p>暂无资料导入批次。</p> : batches.map(batch => <article key={batch.id}><div><b title={batch.datasetName}>{batch.datasetName}</b><span>{batch.totalCount} 份 · 成功 {batch.successCount} · 失败 {batch.failedCount} · 跳过 {batch.skippedCount} · {batch.uploader} · {formatDate(batch.createdAt)}</span>{details[batch.id]?.filter(item => item.reason).map(item => <small key={`${batch.id}-${item.fileName}`}>{item.fileName}：{item.reason}</small>)}</div><em className={`record-status ${batch.status}`}>{batch.status === "completed" ? "已完成" : "处理中"}</em><button onClick={() => void toggleDetails(batch.id)}>{details[batch.id] ? "收起明细" : "查看明细"}</button></article>)}</section>;
+}
+
+function ModelConnectorAdmin({ isSystemAdmin }: { isSystemAdmin: boolean }) {
+  const [connectors, setConnectors] = useState<ModelConnectorRecord[]>([]);
+  const [forms, setForms] = useState<Record<string, { baseUrl: string; model: string; apiKey: string; timeoutMs: number; endpointPath: string; enabled: boolean }>>({});
+  const [message, setMessage] = useState(""); const [working, setWorking] = useState("");
+  const load = useCallback(async () => {
+    if (!isSystemAdmin) return;
+    const response = await fetch("/api/model-connectors", { cache: "no-store" }); const data = await response.json() as { connectors?: ModelConnectorRecord[]; error?: string };
+    if (!response.ok) { setMessage(data.error || "读取模型配置失败"); return; }
+    const rows = data.connectors || []; setConnectors(rows); setForms(Object.fromEntries(MODEL_CONNECTOR_SPECS.map(spec => { const item = rows.find(row => row.purpose === spec.purpose); return [spec.purpose, { baseUrl: item?.baseUrl || "", model: item?.model || "", apiKey: "", timeoutMs: item?.timeoutMs || 15000, endpointPath: item?.endpointPath || "/rerank", enabled: item?.enabled || false }]; })));
+  }, [isSystemAdmin]);
+  useEffect(() => { const timer = window.setTimeout(() => { void load(); }, 0); return () => window.clearTimeout(timer); }, [load]);
+  function update(purpose: string, patch: Partial<{ baseUrl: string; model: string; apiKey: string; timeoutMs: number; endpointPath: string; enabled: boolean }>) { setForms(previous => ({ ...previous, [purpose]: { ...previous[purpose], ...patch } })); }
+  async function save(purpose: "MAIN_MODEL" | "EMBEDDING" | "RERANKER") { const form = forms[purpose]; if (!form) return; setWorking(`save-${purpose}`); setMessage(""); try { const response = await fetch("/api/model-connectors", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ purpose, ...form }) }); const data = await response.json() as { error?: string }; if (!response.ok) throw new Error(data.error || "保存模型配置失败"); setMessage("模型配置已保存，后续新请求会自动读取该配置。"); await load(); } catch (error) { setMessage(error instanceof Error ? error.message : "保存模型配置失败"); } finally { setWorking(""); } }
+  async function test(purpose: "MAIN_MODEL" | "EMBEDDING" | "RERANKER") { setWorking(`test-${purpose}`); setMessage(""); try { const response = await fetch(`/api/model-connectors/${purpose}/test`, { method: "POST" }); const data = await response.json() as { check?: { status: string; httpStatus: number | null; durationMs: number }; error?: string }; if (!response.ok) throw new Error(data.error || "模型连接测试失败"); setMessage(`连接检测：${data.check?.status || "UNCONFIGURED"} · HTTP ${data.check?.httpStatus ?? "-"} · ${data.check?.durationMs ?? 0}ms`); await load(); } catch (error) { setMessage(error instanceof Error ? error.message : "模型连接测试失败"); } finally { setWorking(""); } }
+  if (!isSystemAdmin) return null;
+  return <section className="panel oa-connector-panel"><div className="control-head"><div><h2>模型与算力 / 模型接入配置</h2><p>数据库配置优先于环境变量。API Key 仅以服务端密文保存，列表只显示是否已配置。</p></div></div>{message && <div className="notice">{message}</div>}<div className="model-connector-grid">{MODEL_CONNECTOR_SPECS.map(spec => { const form = forms[spec.purpose]; const current = connectors.find(row => row.purpose === spec.purpose); if (!form) return null; return <section className="oa-connector-section" key={spec.purpose}><h3>{spec.label}</h3><div className="oa-connector-form"><label><span>Base URL</span><input value={form.baseUrl} onChange={event => update(spec.purpose, { baseUrl: event.target.value })} placeholder="http://localhost:1234/v1"/></label><label><span>Model ID</span><input value={form.model} onChange={event => update(spec.purpose, { model: event.target.value })}/></label><label><span>API Key（可选）</span><input type="password" value={form.apiKey} onChange={event => update(spec.purpose, { apiKey: event.target.value })} placeholder={current?.hasCredentials ? "已保存，留空不替换" : "无需时可留空"}/></label><label><span>Timeout (ms)</span><input type="number" min="500" max="120000" value={form.timeoutMs} onChange={event => update(spec.purpose, { timeoutMs: Number(event.target.value) || 15000 })}/></label>{spec.path && <label><span>Rerank Endpoint</span><input value={form.endpointPath} onChange={event => update(spec.purpose, { endpointPath: event.target.value })}/></label>}<label><span>启用</span><select value={form.enabled ? "true" : "false"} onChange={event => update(spec.purpose, { enabled: event.target.value === "true" })}><option value="false">停用</option><option value="true">启用</option></select></label><button disabled={working === `save-${spec.purpose}`} onClick={() => void save(spec.purpose)}>{working === `save-${spec.purpose}` ? "保存中" : "保存配置"}</button><button disabled={working === `test-${spec.purpose}`} onClick={() => void test(spec.purpose)}>{working === `test-${spec.purpose}` ? "检测中" : "测试连接"}</button></div><p>状态：{current?.lastCheckStatus || "UNCONFIGURED"} · 最近检测：{current?.lastCheckedAt ? formatDate(current.lastCheckedAt) : "未检测"}</p></section>; })}</div></section>;
 }
 
 function WritingRecipientOptionsAdmin({ isSystemAdmin }: { isSystemAdmin: boolean }) {

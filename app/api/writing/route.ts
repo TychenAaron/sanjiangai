@@ -7,6 +7,7 @@ import { buildOutline, buildWritingKnowledgeQuery, checkWriting, resolveWritingK
 import { normalizeStructuredWriting, structuredWritingToText } from "../../../lib/writing-structured";
 import { generateWritingWithGateway, resolveWritingModelRuntime, type WritingGenerationResult } from "../../../lib/writing-model-gateway";
 import { getRequestId, writeStructuredLog } from "../../../lib/runtime-observability";
+import { resolveWritingRuntime } from "../../../lib/runtime-model-config";
 
 export const runtime = "edge";
 
@@ -29,7 +30,7 @@ function writingGenerationError(category: WritingGenerationResult["category"]) {
 
 // 说明：读取写作网关的实际服务端运行时配置。Cloudflare 部署读取 Worker secret bindings；Vite/Miniflare 本机开发时，.env secrets 由 process.env 提供。
 // 输出仅传给服务端网关，绝不返回页面、审计详情或普通日志。
-function getWritingModelRuntime() {
+async function getWritingModelRuntime() {
   // Vinext/Cloudflare 的模块运行器无法可靠枚举整个 process.env；必须逐项静态读取，
   // 才能让本机 .env 的服务端变量进入 API Route，同时不会暴露给浏览器代码。
   const workerRuntime = {
@@ -46,7 +47,7 @@ function getWritingModelRuntime() {
     AI_WRITING_MODEL: process.env.AI_WRITING_MODEL,
     AI_MODEL_TIMEOUT_MS: process.env.AI_MODEL_TIMEOUT_MS,
   };
-  return resolveWritingModelRuntime(workerRuntime, localRuntime);
+  return resolveWritingRuntime(resolveWritingModelRuntime(workerRuntime, localRuntime));
 }
 
 async function loadPrivateReferences(id: string) {
@@ -149,7 +150,7 @@ export async function POST(request: Request) {
       const outline = buildOutline(documentType, title, recipient, facts, references, privateReferences);
       // 结构化初稿只使用已确认事实、已授权正式依据和私有材料数量；网关绝不接收私有原文、文件名或无权资料。
       const startedAt = Date.now();
-      const generation = await generateWritingWithGateway({ documentType, title, recipient, submittingDepartment: writing.submittingDepartment, facts, referenceQuery, references, privateReferenceGuidance: privateReferences.map((item) => ({ format: item.parseFormat, excerpt: item.excerpt, locations: item.locations })) }, getWritingModelRuntime());
+      const generation = await generateWritingWithGateway({ documentType, title, recipient, submittingDepartment: writing.submittingDepartment, facts, referenceQuery, references, privateReferenceGuidance: privateReferences.map((item) => ({ format: item.parseFormat, excerpt: item.excerpt, locations: item.locations })) }, await getWritingModelRuntime());
       await writeWritingKnowledgeAudit({ db, user, writingId: id, retrieval: knowledge, requestId: getRequestId(request) });
       // 模型失败时只记录最小审计，保留已有工作区和正文，不创建或覆盖 writing_versions。
       if (generation.mode !== "model" || !generation.content) {
@@ -182,7 +183,7 @@ export async function POST(request: Request) {
       const references = knowledge.references;
       const outline = buildOutline(documentType, title, recipient, facts, references, []);
       const now = new Date().toISOString(); const id = crypto.randomUUID(); const versionId = crypto.randomUUID(); const startedAt = Date.now();
-      const generation = await generateWritingWithGateway({ documentType, title, recipient, submittingDepartment: user.departmentName, facts, referenceQuery, references, privateReferenceGuidance: [] }, getWritingModelRuntime());
+      const generation = await generateWritingWithGateway({ documentType, title, recipient, submittingDepartment: user.departmentName, facts, referenceQuery, references, privateReferenceGuidance: [] }, await getWritingModelRuntime());
       await writeWritingKnowledgeAudit({ db, user, writingId: id, retrieval: knowledge, requestId: getRequestId(request) });
       // 首次模型失败不创建 writing_documents 或 writing_versions，避免失败时留下模拟或空白正文。
       if (generation.mode !== "model" || !generation.content) {

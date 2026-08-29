@@ -491,6 +491,10 @@ button { cursor: pointer; }
 .admin-notice { margin-top: 14px; }
 .oa-connector-panel { margin-top: 16px; padding: 22px; }
 .oa-connector-section { margin-top: 16px; padding: 16px; border: 1px solid #dfe7ed; border-radius: 9px; background: #f9fbfc; }
+.model-connector-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.model-connector-grid .oa-connector-section { margin-top: 0; }
+.model-connector-grid .oa-connector-form { grid-template-columns: 1fr; }
+.model-connector-grid .oa-connector-form button { min-height: 38px; }
 .oa-connector-section h3 { margin: 0 0 12px; color: var(--navy); font-size: 10px; }
 .oa-connector-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px 14px; align-items: end; }
 .oa-connector-form label { min-width: 0; }
@@ -676,6 +680,7 @@ button { cursor: pointer; }
   .local-test-actions, .local-test-levels { grid-template-columns: repeat(2,1fr); }
   .rule-form { grid-template-columns: repeat(2,1fr); }
   .oa-connector-form, .oa-credential-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .model-connector-grid { grid-template-columns: 1fr; }
   .watch-sites { display: none; }
   .resource-preview-page { width: min(100% - 32px, 1280px); }
 }

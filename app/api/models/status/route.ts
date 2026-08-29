@@ -6,7 +6,7 @@ export const runtime = "edge";
 export async function GET(request: Request) {
   try {
     await requireAccessUser(request);
-    const gateway = modelGatewayStatus();
+    const gateway = await modelGatewayStatus();
     return Response.json({
       gateway,
       services: [
