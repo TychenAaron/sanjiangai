@@ -87,6 +87,9 @@ const nav: { label: View; icon: IconName }[] = [
   { label: "知识资源", icon: "folder" },
 ];
 
+// 说明：政策中心和建设总览仅暂停前端展示，后端 API、数据库、迁移与验证仍保留；后续恢复时只需调整此开关。
+const SHOW_SUSPENDED_FRONTEND_MODULES = false;
+
 type PolicySourceRecord = { id: string; name: string; agency: string; status: string };
 type PolicyCandidateRecord = {
   id: string; policySourceId: string; title: string; documentNumber: string | null; issuingBody: string | null;
@@ -186,10 +189,10 @@ export default function Home() {
         <div className="brand"><b>三江</b><span><strong>集团智能办公系统</strong><small>知识中枢 · 智能写作</small></span></div>
         <nav aria-label="主导航">
           <p>员工应用</p>
-          {nav.map(item => <button key={item.label} className={view === item.label ? "active" : ""} onClick={() => setView(item.label)}><Icon name={item.icon}/><span>{item.label}</span></button>)}
+          {nav.filter(item => SHOW_SUSPENDED_FRONTEND_MODULES || item.label !== "政策中心").map(item => <button key={item.label} className={view === item.label ? "active" : ""} onClick={() => setView(item.label)}><Icon name={item.icon}/><span>{item.label}</span></button>)}
           <p className="admin-label">平台管理</p>
           <button className={view === "权限中心" ? "active" : ""} onClick={() => setView("权限中心")}><Icon name="shield"/><span>权限中心</span></button>
-          {canOpenAdmin && <button className={view === "建设总览" ? "active" : ""} onClick={() => setView("建设总览")}><Icon name="policy"/><span>建设总览</span></button>}
+          {SHOW_SUSPENDED_FRONTEND_MODULES && canOpenAdmin && <button className={view === "建设总览" ? "active" : ""} onClick={() => setView("建设总览")}><Icon name="policy"/><span>建设总览</span></button>}
           {canOpenAdmin && <button className={view === "治理后台" ? "active" : ""} onClick={() => setView("治理后台")}><Icon name="admin"/><span>治理后台</span></button>}
         </nav>
         <div className="secure"><Icon name="shield" size={17}/>数据访问受集团权限保护</div>
@@ -202,10 +205,10 @@ export default function Home() {
           {sessionError && <div className="access-blocked"><Icon name="shield" size={30}/><h2>当前账号暂不能进入资料库</h2><p>{sessionError}</p><span>请由系统管理员在“权限中心”按登录邮箱配置员工级别、部门和数据权限。</span></div>}
           {!sessionError && view === "工作台" && <Dashboard greeting={greeting} userName={currentUser?.name || "员工"} isSystemAdmin={currentUser?.role === "system_admin"} query={query} setQuery={setQuery} ask={ask} docType={docType} setDocType={setDocType} go={setView} records={records} summary={summary} dataLoading={dataLoading}/>}
           {!sessionError && view === "知识会话" && <Knowledge query={query} setQuery={setQuery} lastQuestion={lastQuestion} result={knowledgeResult} asking={asking} phase={knowledgePhase} error={askError} ask={ask} conversations={conversations} conversationId={conversationId} setConversationId={setConversationId} refreshConversations={refreshConversations}/>}
-          {!sessionError && view === "政策中心" && <PolicyCenter/>}
+          {!sessionError && SHOW_SUSPENDED_FRONTEND_MODULES && view === "政策中心" && <PolicyCenter/>}
           {!sessionError && view === "智能写作" && <WritingV2/>}
           {!sessionError && view === "知识资源" && <Library user={currentUser} records={records} loading={dataLoading} error={dataError} refresh={refreshRecords}/>} 
-          {!sessionError && view === "建设总览" && canOpenAdmin && <ProjectOverview/>}
+          {!sessionError && SHOW_SUSPENDED_FRONTEND_MODULES && view === "建设总览" && canOpenAdmin && <ProjectOverview/>}
           {!sessionError && view === "权限中心" && <AccessCenter user={currentUser} refreshSessionAndRecords={refreshSessionAndRecords}/>}
           {!sessionError && view === "治理后台" && canOpenAdmin && <Admin user={currentUser} records={records} summary={summary} refresh={refreshRecords}/>} 
         </div>
@@ -243,10 +246,10 @@ function Dashboard({ greeting, userName, isSystemAdmin, query, setQuery, ask, do
       {[{icon:"search" as IconName,title:"智能搜索",text:"全文、语义与混合检索",go:"智能搜索" as View},{icon:"chat" as IconName,title:"知识会话",text:"RAG回答与引用溯源",go:"知识会话" as View},{icon:"folder" as IconName,title:"知识资源",text:"原文、元数据、版本与权限",go:"知识资源" as View}].map(item => <button className="panel" key={item.title} onClick={() => go(item.go)}><i><Icon name={item.icon}/></i><span><strong>{item.title}</strong><small>{item.text}</small></span><Icon name="arrow" size={16}/></button>)}
     </section>
 
-    <section className="panel monitor">
+    {SHOW_SUSPENDED_FRONTEND_MODULES && <section className="panel monitor">
       <PanelHead icon="policy" title="青海政策监测" sub="定期发现政府及厅局最新政策和申报要求" action="查看政策中心" onClick={() => go("政策中心")}/>
       <div className="policy-strip">{policies.slice(0,2).map(p => <button key={p.title}><em>{p.level}</em><span><strong>{p.title}</strong><small>发现时间：{p.date}</small></span><i className={p.state === "待审核" ? "pending" : ""}>{p.state}</i></button>)}</div>
-    </section>
+    </section>}
 
     <section className="panel recent">
       <PanelHead icon="folder" title="最近文档" sub="OA原文、上传资料、AI草稿、人工修改稿和最终定稿全程留痕" action="查看全部" onClick={() => go("知识资源")}/>
