@@ -50,7 +50,8 @@
     "verify:chinese-keyword-retrieval": "node --experimental-strip-types scripts/verify-chinese-keyword-retrieval.ts",
     "verify:writing-recipient-options": "node --experimental-strip-types scripts/verify-writing-recipient-options.ts",
     "verify:document-preview": "node --experimental-strip-types scripts/verify-document-preview.ts",
-    "verify:model-connector-config": "node --experimental-strip-types scripts/verify-model-connector-config.ts"
+    "verify:model-connector-config": "node --experimental-strip-types scripts/verify-model-connector-config.ts",
+    "verify:simplified-knowledge-upload-lifecycle": "node --experimental-strip-types scripts/verify-simplified-knowledge-upload-lifecycle.ts"
   },
   "dependencies": {
     "@mdgate/ppt": "0.6.20",

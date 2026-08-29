@@ -74,7 +74,7 @@ export async function POST(request: Request) {
       id: documentId, title, documentType: String(body.documentType || "其他资料"), sourceType: String(body.sourceType || "人工录入"),
       sourceRef: String(body.sourceRef || "") || null, ownerDepartment, securityLevel, permissionScope,
       lifecycleStatus: "effective", trialDataClass, isTrialData: true, resourceStatus: "approved", resourceCategory: String(body.resourceCategory || body.documentType || "其他"),
-      sourceOrganization: String(body.sourceOrganization || "").trim() || null, documentDate: String(body.documentDate || "").trim() || null, applicableScope: String(body.applicableScope || "").trim() || null, reliabilityScore: 60, knowledgeStatus: status, currentVersion: 1,
+      sourceOrganization: String(body.sourceOrganization || "").trim() || null, documentDate: String(body.documentDate || "").trim() || null, applicableScope: String(body.applicableScope || "").trim() || null, reliabilityScore: 0, knowledgeStatus: status, currentVersion: 1,
       createdBy: operator, createdByUserId: user.id, createdAt: now, updatedAt: now,
     });
     await db.insert(documentVersions).values({

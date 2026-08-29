@@ -51,7 +51,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     await indexDocumentVersion(id, versionId, content);
     // 新版本一创建即清除旧向量；直到新版本重新批准并成功生成 Embedding 前，不存在可检索旧版本向量。
     await new DevD1VectorStore().deleteDocumentVectors(id);
-    await db.update(documents).set({ currentVersion: nextVersion, knowledgeStatus: "approved", resourceStatus: "approved", vectorStatus: "pending", reliabilityScore: 60, updatedAt: now }).where(eq(documents.id, id));
+    await db.update(documents).set({ currentVersion: nextVersion, lifecycleStatus: "effective", knowledgeStatus: "approved", resourceStatus: "approved", indexStatus: "ready", vectorStatus: "pending", reliabilityScore: 0, updatedAt: now }).where(eq(documents.id, id));
     await db.insert(approvals).values({ id: crypto.randomUUID(), documentId: id, versionId, status: "approved", submittedBy: operator, submittedAt: now, reviewer: operator, reviewedAt: now, comment: "新版本解析成功，系统自动批准" });
     const vectorResult = await indexApprovedDocumentVersion(id, versionId);
     await db.update(documents).set({ vectorStatus: vectorResult.status, updatedAt: new Date().toISOString() }).where(eq(documents.id, id));

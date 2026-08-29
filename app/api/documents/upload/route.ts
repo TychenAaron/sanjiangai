@@ -1,4 +1,4 @@
-// 正式知识文件上传入口：单文件与管理员批次均复用同一预检、R2 回滚、解析、分段和待审核生命周期。
+// 正式知识文件上传入口：单文件与管理员批次均复用同一预检、R2 回滚、解析、分段和自动批准生命周期。
 import { env } from "cloudflare:workers";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "../../../../db";
@@ -33,7 +33,7 @@ async function recordBatchTerminal(batch: BatchContext | null, form: FormData, f
 
 /**
  * 上传一个正式知识文件。
- * 输入为资料管理角色上传的文件和可选批次 ID；解析成功时自动输出已批准文档，待解析文件保持待审核。格式、禁止词条检查均在 R2/D1 写入前完成。
+ * 输入为资料管理角色上传的文件和可选批次 ID；上传成功即自动批准并生效，解析状态只决定索引和 RAG 是否可用。格式、禁止词条检查均在 R2/D1 写入前完成。
  */
 export async function POST(request: Request) {
   let bucket: Bucket | undefined; let storageKey: string | undefined; let storageWritten = false;
@@ -61,7 +61,8 @@ export async function POST(request: Request) {
     let extracted: Awaited<ReturnType<typeof extractUpload>>;
     try { extracted = await extractUpload(file); } catch (error) { const reason = error instanceof Error ? error.message : "文件预检失败"; await recordBatchTerminal(batch, form, file, "failed", reason); return Response.json({ error: reason }, { status: 400 }); }
     const { buffer, content, parseStatus, parseReason } = extracted;
-    const automaticallyApproved = parseStatus === "parsed";
+    // 批准状态与解析状态分离：所有受控上传均立即成为正式资料；只有已解析资料才建立检索和向量索引。
+    const isParsed = parseStatus === "parsed";
     const title = String(form.get("title") || file.name.replace(/\.[^.]+$/, "")).trim();
     if (!title) { await recordBatchTerminal(batch, form, file, "failed", "文件名称为空"); return Response.json({ error: "请填写文件名称" }, { status: 400 }); }
     const db = getDb(); const blocked = await findBlockedMatches({ title, fileName: file.name, content });
@@ -80,16 +81,16 @@ export async function POST(request: Request) {
     await db.insert(documents).values({
       id: documentId, title, documentType: batch?.documentType || String(form.get("documentType") || "其他资料"), sourceType: "文件上传", sourceRef: file.name,
       ownerDepartment, securityLevel, permissionScope, lifecycleStatus: "effective", trialDataClass, isTrialData: true, fileName: file.name, storageKey, mimeType: file.type || "application/octet-stream", fileSize: file.size,
-      parseStatus, indexStatus: automaticallyApproved ? "ready" : "pending", resourceStatus: automaticallyApproved ? "approved" : "pending_review", resourceCategory: batch?.resourceCategory || String(form.get("resourceCategory") || form.get("documentType") || "其他"),
+      parseStatus, indexStatus: isParsed ? "ready" : "pending", resourceStatus: "approved", resourceCategory: batch?.resourceCategory || String(form.get("resourceCategory") || form.get("documentType") || "其他"),
       sourceOrganization: batch?.sourceOrganization || String(form.get("sourceOrganization") || "").trim() || null, documentDate: batch?.documentDate || String(form.get("documentDate") || "").trim() || null, applicableScope: batch?.applicableScope || String(form.get("applicableScope") || "").trim() || null,
-      reliabilityScore: 60, knowledgeStatus: automaticallyApproved ? "approved" : "pending", currentVersion: 1, createdBy: user.name, createdByUserId: user.id, datasetId: batch?.datasetId || null, importBatchId: batch?.id || null, createdAt: now, updatedAt: now,
+      reliabilityScore: 0, knowledgeStatus: "approved", currentVersion: 1, createdBy: user.name, createdByUserId: user.id, datasetId: batch?.datasetId || null, importBatchId: batch?.id || null, createdAt: now, updatedAt: now,
     });
-    await db.insert(documentVersions).values({ id: versionId, documentId, versionNo: 1, content, changeSummary: parseStatus === "parsed" ? "文件首次上传、解析并自动批准" : `文件已保存，${parseReason || "等待后续解析"}`, versionStatus: automaticallyApproved ? "approved" : "pending", createdBy: user.name, createdAt: now });
+    await db.insert(documentVersions).values({ id: versionId, documentId, versionNo: 1, content, changeSummary: isParsed ? "文件首次上传、解析并自动批准" : `文件已自动批准，${parseReason || "等待后续解析"}`, versionStatus: "approved", createdBy: user.name, createdAt: now });
     const chunkCount = await indexDocumentVersion(documentId, versionId, content);
-    await db.insert(approvals).values({ id: crypto.randomUUID(), documentId, versionId, status: automaticallyApproved ? "approved" : "pending", submittedBy: user.name, submittedAt: now, reviewer: automaticallyApproved ? user.name : null, reviewedAt: automaticallyApproved ? now : null, comment: automaticallyApproved ? "上传解析成功，系统自动批准" : null });
-    const vectorResult = automaticallyApproved ? await indexApprovedDocumentVersion(documentId, versionId) : { status: "pending", count: 0 };
-    if (automaticallyApproved) await db.update(documents).set({ vectorStatus: vectorResult.status, updatedAt: new Date().toISOString() }).where(eq(documents.id, documentId));
-    await db.insert(auditLogs).values({ id: crypto.randomUUID(), action: "上传并解析文件", entityType: "document", entityId: documentId, operator: user.name, detail: automaticallyApproved ? `解析成功并自动批准；向量索引：${vectorResult.status}` : `文件待后续解析；解析状态：${parseStatus}`, createdAt: now });
+    await db.insert(approvals).values({ id: crypto.randomUUID(), documentId, versionId, status: "approved", submittedBy: user.name, submittedAt: now, reviewer: user.name, reviewedAt: now, comment: isParsed ? "上传解析成功，系统自动批准" : `上传成功，系统自动批准；${parseReason || "等待后续解析"}` });
+    const vectorResult = isParsed ? await indexApprovedDocumentVersion(documentId, versionId) : { status: "pending", count: 0 };
+    if (isParsed) await db.update(documents).set({ vectorStatus: vectorResult.status, updatedAt: new Date().toISOString() }).where(eq(documents.id, documentId));
+    await db.insert(auditLogs).values({ id: crypto.randomUUID(), action: "上传并自动批准文件", entityType: "document", entityId: documentId, operator: user.name, detail: isParsed ? `解析成功并自动批准；向量索引：${vectorResult.status}` : `已自动批准，等待后续解析；解析状态：${parseStatus}`, createdAt: now });
     const [created] = await db.select().from(documents).where(eq(documents.id, documentId));
     if (batch) {
       await recordKnowledgeImportItem({ batchId: batch.id, clientFileKey: String(form.get("batchItemKey") || `${file.name}:${file.size}:${file.lastModified}`), fileName: file.name, fileSize: file.size, mimeType: file.type, status: "succeeded", documentId, versionId, parseStatus, chunkCount, indexStatus: created.indexStatus });

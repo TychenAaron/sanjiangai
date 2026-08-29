@@ -24,7 +24,7 @@ export const documents = sqliteTable("documents", {
   parseStatus: text("parse_status").notNull().default("parsed"), indexStatus: text("index_status").notNull().default("ready"),
   // 向量索引状态独立于既有关键词分段索引；未配置 Embedding 服务时保持 pending，绝不伪造向量结果。
   vectorStatus: text("vector_status").notNull().default("pending"),
-  // 正式资料的生命周期与审核元数据；只有 approved、effective 且可靠性达标的资料可进入检索和写作引用。
+  // 正式资料的生命周期与审核元数据；上传入口自动批准，解析完成且 approved、effective 的当前版本才可进入检索和写作引用。
   resourceStatus: text("resource_status").notNull().default("draft"), resourceCategory: text("resource_category").notNull().default("其他"),
   sourceOrganization: text("source_organization"), documentDate: text("document_date"), applicableScope: text("applicable_scope"), reliabilityScore: integer("reliability_score").notNull().default(0), reviewNote: text("review_note"),
   knowledgeStatus: text("knowledge_status").notNull().default("pending"), currentVersion: integer("current_version").notNull().default(1),
