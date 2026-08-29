@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 import { eq } from "drizzle-orm";
 import { getDb } from "../../../../../db";
 import { approvals, auditLogs, documentAcl, documentChunks, documents, documentVersions } from "../../../../../db/schema";
-import { accessError, requireAccessUser } from "../../../../../lib/access";
+import { accessError, canManageFormalDocuments, requireAccessUser } from "../../../../../lib/access";
 import { DevD1VectorStore } from "../../../../../lib/vector-store";
 
 export const runtime = "edge";
@@ -14,7 +14,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   try {
     const user = await requireAccessUser(request);
     const { id } = await context.params;
-    if (user.role !== "system_admin") return Response.json({ error: "仅系统管理员可以归档资料" }, { status: 403 });
+    if (!canManageFormalDocuments(user)) return Response.json({ error: "当前账号无资料归档管理权限" }, { status: 403 });
     const db = getDb();
     const [doc] = await db.select().from(documents).where(eq(documents.id, id));
     if (!doc) return Response.json({ error: "资料不存在" }, { status: 404 });
@@ -36,7 +36,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
     const db = getDb();
     const [doc] = await db.select().from(documents).where(eq(documents.id, id));
     if (!doc) return Response.json({ error: "资料不存在" }, { status: 404 });
-    if (user.role !== "system_admin") return Response.json({ error: "仅系统管理员可以删除资料" }, { status: 403 });
+    if (!canManageFormalDocuments(user)) return Response.json({ error: "当前账号无资料删除管理权限" }, { status: 403 });
     const now = new Date().toISOString();
     // 先标记不可用，R2 清理异常也不会再被检索或引用。
     await db.update(documents).set({ resourceStatus: "archived", knowledgeStatus: "archived", lifecycleStatus: "deleted", updatedAt: now }).where(eq(documents.id, id));

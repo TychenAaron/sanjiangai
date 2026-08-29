@@ -10,7 +10,7 @@ assert(conversations.includes("createdByUserId !== user.id") && conversations.in
 assert(ask.includes("saveConversationExchange") && search.includes("saveConversationExchange"), "问答和资料检索均应写入会话");
 assert(ask.includes("getValidConversationContext") && ask.includes("answerKnowledge(user, query, history)"), "智能问答必须把有效会话上下文交给既有模型链路");
 assert(!search.includes("callModelGateway") && !search.includes("answerKnowledge"), "资料检索不得调用模型");
-assert(rag.includes('eq(documents.parseStatus, "parsed")') && rag.includes('eq(documents.indexStatus, "ready")') && rag.includes('gte(documents.reliabilityScore, 60)') && rag.includes('ne(documents.securityLevel, "D4")'), "两种模式必须共用正式资料过滤");
+assert(rag.includes('eq(documents.parseStatus, "parsed")') && rag.includes('eq(documents.indexStatus, "ready")') && !rag.includes('gte(documents.reliabilityScore, 60)') && rag.includes('ne(documents.securityLevel, "D4")'), "两种模式必须共用正式资料过滤且不以评分阻断");
 const config = readModelGatewayConfig({ MODEL_GATEWAY_BASE_URL: "https://model.example.invalid/v1", MODEL_GATEWAY_API_KEY: "virtual-key", MODEL_GATEWAY_MODEL: "virtual-model" });
 let called = false;
 const gatewayResult = await callModelGateway(config, "虚构问题", [{ title: "虚构正式资料", version: 1, sourceType: "manual", location: "第1段", excerpt: "虚构正式依据" }], async () => { called = true; return Response.json({ choices: [{ message: { content: "虚构回答[1]" } }] }); }, [{ role: "assistant", content: "仅此有效历史回答" }]);

@@ -29,7 +29,13 @@ export type AccessUserLike = {
   clearanceLevel: number;
 };
 
-const reviewRoles = new Set(["system_admin"]);
+const reviewRoles = new Set(["reviewer", "knowledge_admin", "system_admin"]);
+const documentManagementRoles = new Set(["reviewer", "knowledge_admin", "system_admin"]);
+
+/** 判断用户是否属于正式资料管理角色；上传、元数据、新版本和生命周期接口均在服务端复用此规则。 */
+export function canManageFormalDocuments(user: AccessUserLike) {
+  return documentManagementRoles.has(user.role);
+}
 
 // 说明：把中文和英文的资料级别统一换算成可比较的内部等级。
 // 输入是资料级别字符串，输出是 1 到 3 的等级数字，数字越大表示越敏感。
@@ -170,7 +176,7 @@ export function canEditDocument(
   return (
     canReadDocument(user, document, grants) &&
     (document.createdByUserId === user.id ||
-      user.role === "knowledge_admin" ||
+      canManageFormalDocuments(user) ||
       Boolean(direct?.canEdit))
   );
 }
@@ -181,7 +187,7 @@ export function canReviewDocument(
   document: AccessDocument,
 ) {
   // 说明：系统管理员承担全局审核职责，可审核任何待审核资料；这不改变普通员工读取或审核权限。
-  if (user.role === "system_admin" && document.resourceStatus === "pending_review") return true;
+  if (reviewRoles.has(user.role) && document.resourceStatus === "pending_review") return true;
 
   return false;
 }

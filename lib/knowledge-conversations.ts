@@ -1,5 +1,5 @@
 // 本文件维护知识会话的最小持久化与历史引用复核；不读取 R2、不外发模型正文，也不保存资料全文。
-import { and, desc, eq, isNull, ne, gte } from "drizzle-orm";
+import { and, desc, eq, isNull, ne } from "drizzle-orm";
 import { getDb } from "../db";
 import { documentAcl, documentChunks, documents, documentVersions, knowledgeConversations, knowledgeMessageCitations, knowledgeMessages } from "../db/schema";
 import type { AccessUser } from "./access";
@@ -41,7 +41,7 @@ async function citationAvailable(user: AccessUser, citation: typeof knowledgeMes
   const db = getDb();
   const [grants, rows] = await Promise.all([
     db.select().from(documentAcl).where(eq(documentAcl.documentId, citation.documentId)),
-    db.select({ document: documents, version: documentVersions, chunk: documentChunks }).from(documentChunks).innerJoin(documents, eq(documentChunks.documentId, documents.id)).innerJoin(documentVersions, eq(documentChunks.versionId, documentVersions.id)).where(and(eq(documents.id, citation.documentId), eq(documentVersions.id, citation.versionId), eq(documentChunks.chunkIndex, citation.chunkIndex), eq(documents.knowledgeStatus, "approved"), eq(documents.resourceStatus, "approved"), eq(documents.lifecycleStatus, "effective"), eq(documents.parseStatus, "parsed"), eq(documents.indexStatus, "ready"), ne(documents.securityLevel, "D4"), gte(documents.reliabilityScore, 60), eq(documentVersions.versionStatus, "approved"))).limit(1),
+    db.select({ document: documents, version: documentVersions, chunk: documentChunks }).from(documentChunks).innerJoin(documents, eq(documentChunks.documentId, documents.id)).innerJoin(documentVersions, eq(documentChunks.versionId, documentVersions.id)).where(and(eq(documents.id, citation.documentId), eq(documentVersions.id, citation.versionId), eq(documentChunks.chunkIndex, citation.chunkIndex), eq(documents.knowledgeStatus, "approved"), eq(documents.resourceStatus, "approved"), eq(documents.lifecycleStatus, "effective"), eq(documents.parseStatus, "parsed"), eq(documents.indexStatus, "ready"), ne(documents.securityLevel, "D4"), eq(documentVersions.versionStatus, "approved"))).limit(1),
   ]);
   const row = rows[0];
   return Boolean(row && row.version.versionNo === row.document.currentVersion && canReadDocument(user, row.document, grants));

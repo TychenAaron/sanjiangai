@@ -752,12 +752,10 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
   const [sourceFilter, setSourceFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [reviewForm, setReviewForm] = useState({ resourceCategory: "", sourceOrganization: "", documentDate: "", applicableScope: "", reliabilityScore: "60", comment: "" });
   const [form, setForm] = useState({ title: "", documentType: "制度文件", sourceType: "人工录入", ownerDepartment: user?.departmentName || "集团办公室", securityLevel: "D2", permissionScope: "责任部门", trialDataClass: "T2-内部脱敏测试", resourceCategory: "其他", sourceOrganization: "", documentDate: "", applicableScope: "", content: "", confirmedDesensitized: false });
 
   function setField(name: string, value: string) { setForm(previous => ({ ...previous, [name]: value })); }
-  const isSystemAdmin = user?.role === "system_admin";
-  const canManageLibrary = isSystemAdmin;
+  const canManageLibrary = Boolean(user && ["reviewer", "knowledge_admin", "system_admin"].includes(user.role));
   const loadImportBatches = useCallback(async () => {
     if (!canManageLibrary) return;
     const response = await fetch("/api/knowledge-import-batches?pageSize=10", { cache: "no-store" });
@@ -770,20 +768,6 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
     (!dateFrom || (record.documentDate || "") >= dateFrom) &&
     (!dateTo || (record.documentDate || "") <= dateTo),
   );
-
-  // 审核输入为管理员补齐的元数据和决定；接口再次校验角色与批准门槛，页面不会自行伪造状态。
-  async function reviewResource(record: DocumentRecord, decision: "approve" | "reject") {
-    if (decision === "reject" && !reviewForm.comment.trim()) { setNotice("拒绝资料时请填写简短审核理由。"); return; }
-    setSaving(true); setNotice("");
-    try {
-      const response = await fetch(`/api/documents/${record.id}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision, ...reviewForm, reliabilityScore: Number(reviewForm.reliabilityScore) }) });
-      const result = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(result.error || "审核失败");
-      setNotice(decision === "approve" ? "资料已批准，可按权限作为正式依据使用。" : "资料已拒绝，不会进入正式检索和引用。");
-      await refresh();
-    } catch (error) { setNotice(error instanceof Error ? error.message : "审核失败"); }
-    finally { setSaving(false); }
-  }
 
   // 归档与删除均由服务端执行权限和 D1/R2 清理；前端只显示简短结果，不显示存储键或正文。
   async function changeLifecycle(record: DocumentRecord, action: "archive" | "delete") {
@@ -804,7 +788,7 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
    * 输入为当前管理员勾选的资料 ID；输出为逐项成功/失败汇总。每项复用既有生命周期删除接口，失败不回滚已成功项。
    */
   async function deleteSelectedDocuments() {
-    if (!isSystemAdmin || selectedDocumentIds.length === 0) return;
+    if (!canManageLibrary || selectedDocumentIds.length === 0) return;
     if (!window.confirm(`确认删除已选中的 ${selectedDocumentIds.length} 份资料？此操作会使资料立即退出当前检索和 RAG。`)) return;
     if (!window.confirm("请再次确认：将逐份清理资料记录、分段和向量索引，已成功删除的资料不会因其他资料失败而回滚。")) return;
     setSaving(true); setNotice(""); let succeeded = 0; const failed: string[] = [];
@@ -827,7 +811,7 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
       const result = await response.json() as { error?: string };
       if (!response.ok) throw new Error(result.error || "保存失败");
       setForm({ ...form, title: "", content: "", confirmedDesensitized: false }); setAdding(false);
-      setNotice(submitMode === "draft" ? "草稿已保存，系统已生成V1.0版本记录。" : "资料已提交审核，审核通过后才会进入正式知识库。");
+      setNotice("资料已保存并自动成为正式资料；解析成功后可进入当前检索范围。");
       await refresh();
     } catch (e) { setNotice(e instanceof Error ? e.message : "保存失败"); }
     finally { setSaving(false); }
@@ -850,8 +834,6 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
         const extension = file.name.split(".").pop()?.toLowerCase() || "";
         if (!new Set(["docx", "pdf", "txt", "md", "xlsx", "xls", "pptx", "ppt"]).has(extension)) { const reason = "不支持的文件类型"; failed.push({ fileName: file.name, reason }); setBatchFileStatuses(items => items.map(item => item.fileName === file.name && item.size === file.size ? { ...item, status: "失败", reason } : item)); continue; }
         if (file.size <= 0) { const reason = "文件为空"; failed.push({ fileName: file.name, reason }); setBatchFileStatuses(items => items.map(item => item.fileName === file.name && item.size === file.size ? { ...item, status: "失败", reason } : item)); continue; }
-        // 文件大小在浏览器预检，避免超限文件触发网关 413 后被误报为网络异常。
-        if (file.size > 8 * 1024 * 1024) { const reason = "文件过大 / 已跳过（单文件最大 8MB）"; failed.push({ fileName: file.name, reason }); setBatchFileStatuses(items => items.map(item => item.fileName === file.name && item.size === file.size ? { ...item, status: "跳过", reason } : item)); continue; }
         setBatchFileStatuses(items => items.map(item => item.fileName === file.name && item.size === file.size ? { ...item, status: "上传中", reason: undefined } : item));
         const payload = new FormData();
         payload.set("file", file); payload.set("title", uploadFiles.length === 1 ? form.title : file.name.replace(/\.[^.]+$/, "")); payload.set("documentType", form.documentType);
@@ -863,8 +845,8 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
         try {
           const response = await fetch("/api/documents/upload", { method: "POST", body: payload });
           const raw = await response.text(); let result: { error?: string } = {};
-          try { result = JSON.parse(raw) as { error?: string }; } catch { /* 413 等网关响应可能没有 JSON 正文，仍按状态码给出用户可理解提示。 */ }
-          if (!response.ok) { const reason = response.status === 413 ? "文件超过单文件大小限制（单文件最大 8MB）" : result.error || "上传失败"; failed.push({ fileName: file.name, reason }); setBatchFileStatuses(items => items.map(item => item.fileName === file.name && item.size === file.size ? { ...item, status: response.status === 409 ? "跳过" : "失败", reason } : item)); continue; }
+          try { result = JSON.parse(raw) as { error?: string }; } catch { /* 运行环境可能在路由前拒绝异常请求体，仍显示状态码对应提示。 */ }
+          if (!response.ok) { const reason = response.status === 413 ? "请求体超过当前运行环境限制，请拆分文件后重试" : result.error || "上传失败"; failed.push({ fileName: file.name, reason }); setBatchFileStatuses(items => items.map(item => item.fileName === file.name && item.size === file.size ? { ...item, status: response.status === 409 ? "跳过" : "失败", reason } : item)); continue; }
           succeeded += 1;
           setBatchFileStatuses(items => items.map(item => item.fileName === file.name && item.size === file.size ? { ...item, status: "成功" } : item));
         } catch { const reason = "网络请求失败"; failed.push({ fileName: file.name, reason }); setBatchFileStatuses(items => items.map(item => item.fileName === file.name && item.size === file.size ? { ...item, status: "失败", reason } : item)); }
@@ -872,7 +854,7 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
       await fetch(`/api/knowledge-import-batches/${batchId}`, { method: "POST" });
       setBatchUploadSummary({ total: uploadFiles.length, succeeded, failed });
       setUploadFiles([]); setForm({ ...form, title: "", content: "", confirmedDesensitized: false });
-      setNotice(`本批共处理 ${uploadFiles.length} 份：成功 ${succeeded} 份，失败 ${failed.length} 份。所有成功文件均已提交正式资料审核。`);
+      setNotice(`本批共处理 ${uploadFiles.length} 份：成功 ${succeeded} 份，失败 ${failed.length} 份。解析成功的文件已自动成为正式资料。`);
       await refresh();
       await loadImportBatches();
     } catch (error) { setNotice(error instanceof Error ? error.message : "上传失败"); }
@@ -886,6 +868,20 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
     if (!response.ok) { setNotice(result.error || "读取版本失败"); return; }
     setVersions(result.versions || []); setVersionContent(result.versions?.[0]?.content || "");
   }
+  /** 仅资料管理角色可调用服务端白名单元数据接口；上传时间不在请求体中，避免被浏览器篡改。 */
+  async function editMetadata(record: DocumentRecord) {
+    const resourceCategory = window.prompt("资料类别", record.resourceCategory || "") ?? record.resourceCategory;
+    const sourceOrganization = window.prompt("来源单位", record.sourceOrganization || "") ?? record.sourceOrganization;
+    const applicableScope = window.prompt("适用范围", record.applicableScope || "") ?? record.applicableScope;
+    setSaving(true); setNotice("");
+    try {
+      const response = await fetch(`/api/documents/${record.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ resourceCategory, sourceOrganization, applicableScope }) });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "更新资料信息失败");
+      setNotice("资料信息已更新，上传时间保持不变。"); await refresh();
+    } catch (error) { setNotice(error instanceof Error ? error.message : "更新资料信息失败"); }
+    finally { setSaving(false); }
+  }
 
   async function saveVersion() {
     if (!selected || !versionContent.trim()) return;
@@ -895,8 +891,8 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
       const result = await response.json() as { error?: string; version?: number };
       if (!response.ok) throw new Error(result.error || "创建新版本失败");
       setVersionEditor(false); await refresh();
-      await openRecord({ ...selected, currentVersion: result.version || selected.currentVersion + 1, knowledgeStatus: "pending" });
-      setNotice(`V${result.version}.0已生成并提交审核，旧版本仍完整保留。`);
+      await openRecord({ ...selected, currentVersion: result.version || selected.currentVersion + 1, knowledgeStatus: "approved" });
+      setNotice(`V${result.version}.0已生成并自动生效，旧版本仍完整保留。`);
     } catch (e) { setNotice(e instanceof Error ? e.message : "创建新版本失败"); }
     finally { setSaving(false); }
   }
@@ -910,7 +906,7 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
     {adding && <div className="panel ingest-form">
       <div className="trial-rule"><Icon name="shield" size={18}/><div><strong>当前为试用数据入口</strong><span>只允许公开资料、内部脱敏测试资料和部门隔离测试资料；真实敏感资料与禁止项不得上传。</span></div></div>
       <div className="ingest-mode"><button className={ingestMode === "file" ? "active" : ""} onClick={() => setIngestMode("file")}>上传文件</button><button className={ingestMode === "text" ? "active" : ""} onClick={() => setIngestMode("text")}>粘贴正文</button><span>{ingestMode === "file" ? "支持 DOCX、PDF、TXT、MD、XLSX、XLS、PPTX、PPT；XLS/PPT 可安全保存并按状态继续处理。" : "适合快速粘贴一小段脱敏制度进行测试。"}</span></div>
-      {ingestMode === "file" && <><label className="file-drop"><input type="file" multiple accept=".docx,.pdf,.txt,.md,.xlsx,.xls,.pptx,.ppt" onChange={event => { const files = [...(event.target.files || [])]; const unique = files.filter((file, index) => files.findIndex(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified) === index); setUploadFiles(unique); setBatchFileStatuses(unique.map(file => ({ fileName: file.name, size: file.size, type: file.name.split(".").pop()?.toUpperCase() || "FILE", status: file.size > 8 * 1024 * 1024 ? "跳过" : "待预检", reason: file.size > 8 * 1024 * 1024 ? "文件过大 / 已跳过（单文件最大 8MB）" : undefined }))); setBatchUploadSummary(null); if (unique.length === 1 && !form.title) setField("title", unique[0].name.replace(/\.[^.]+$/, "")); }}/><Icon name="folder" size={24}/><span><strong>{uploadFiles.length ? `已选择 ${uploadFiles.length} 份文件` : "选择脱敏文件"}</strong><small>{uploadFiles.length === 1 ? `${uploadFiles[0].name} · ${(uploadFiles[0].size / 1024).toFixed(1)} KB` : "可一次选择多份文件；单个文件不超过 8MB"}</small></span></label><div className="batch-file-list">{batchFileStatuses.map(item => <div key={`${item.fileName}-${item.size}`}><b title={item.fileName}>{item.fileName}</b><span>{item.type} · {(item.size / 1024).toFixed(1)} KB</span><em className={`batch-status ${item.status}`}>{item.status}{item.reason ? `：${item.reason}` : ""}</em></div>)}</div>{batchUploadSummary && <div className="notice"><strong>本批处理结果：</strong>共 {batchUploadSummary.total} 份，成功 {batchUploadSummary.succeeded} 份，失败或跳过 {batchUploadSummary.failed.length} 份。结果已保存到批次记录。</div>}</>}
+      {ingestMode === "file" && <><label className="file-drop"><input type="file" multiple accept=".docx,.pdf,.txt,.md,.xlsx,.xls,.pptx,.ppt" onChange={event => { const files = [...(event.target.files || [])]; const unique = files.filter((file, index) => files.findIndex(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified) === index); setUploadFiles(unique); setBatchFileStatuses(unique.map(file => ({ fileName: file.name, size: file.size, type: file.name.split(".").pop()?.toUpperCase() || "FILE", status: "待预检" }))); setBatchUploadSummary(null); if (unique.length === 1 && !form.title) setField("title", unique[0].name.replace(/\.[^.]+$/, "")); }}/><Icon name="folder" size={24}/><span><strong>{uploadFiles.length ? `已选择 ${uploadFiles.length} 份文件` : "选择脱敏文件"}</strong><small>{uploadFiles.length === 1 ? `${uploadFiles[0].name} · ${(uploadFiles[0].size / 1024).toFixed(1)} KB` : "可一次选择多份文件；解析成功后自动成为正式资料"}</small></span></label><div className="batch-file-list">{batchFileStatuses.map(item => <div key={`${item.fileName}-${item.size}`}><b title={item.fileName}>{item.fileName}</b><span>{item.type} · {(item.size / 1024).toFixed(1)} KB</span><em className={`batch-status ${item.status}`}>{item.status}{item.reason ? `：${item.reason}` : ""}</em></div>)}</div>{batchUploadSummary && <div className="notice"><strong>本批处理结果：</strong>共 {batchUploadSummary.total} 份，成功 {batchUploadSummary.succeeded} 份，失败或跳过 {batchUploadSummary.failed.length} 份。结果已保存到批次记录。</div>}</>}
       <div className="form-grid">
         <label><span>{ingestMode === "file" ? "资料集名称 *" : "文件名称 *"}</span><input value={ingestMode === "file" ? batchDatasetName : form.title} onChange={e => ingestMode === "file" ? setBatchDatasetName(e.target.value) : setField("title", e.target.value)} placeholder={ingestMode === "file" ? "例如：LOCAL_TRIAL_20260828" : "例如：集团采购管理办法（试行）"}/></label>
         <label><span>试用数据类别 *</span><select value={form.trialDataClass} onChange={e => { const value = e.target.value; setField("trialDataClass", value); if (value === "T1-公开资料") { setField("securityLevel", "D1"); setField("permissionScope", "公司全员"); } if (value === "T3-部门隔离测试") setField("permissionScope", "责任部门"); }}><option>T1-公开资料</option><option>T2-内部脱敏测试</option><option>T3-部门隔离测试</option></select></label>
@@ -930,17 +926,15 @@ function Library({ user, records, loading, error, refresh }: { user: SessionUser
     </div>}
     {error && <div className="notice error">数据库暂时无法读取：{error}</div>}
     <div className="library-filters"><select value={statusFilter} onChange={event => setStatusFilter(event.target.value)}><option value="all">全部状态</option><option value="pending_review">待审核</option><option value="approved">已批准</option><option value="rejected">已拒绝</option><option value="archived">已归档</option></select><select value={categoryFilter} onChange={event => setCategoryFilter(event.target.value)}><option value="all">全部类别</option>{[...new Set(records.map(item => item.resourceCategory))].map(item => <option key={item} value={item}>{item}</option>)}</select><input value={sourceFilter} onChange={event => setSourceFilter(event.target.value)} placeholder="来源单位"/><input type="date" value={dateFrom} onChange={event => setDateFrom(event.target.value)} title="文件日期起始"/><input type="date" value={dateTo} onChange={event => setDateTo(event.target.value)} title="文件日期截止"/></div>
-    {isSystemAdmin && <div className="bulk-document-actions"><label><input type="checkbox" checked={visibleRecords.length > 0 && visibleRecords.every(record => selectedDocumentIds.includes(record.id))} onChange={event => setSelectedDocumentIds(event.target.checked ? visibleRecords.map(record => record.id) : [])}/>全选当前页</label><span>已选 {selectedDocumentIds.length} 份</span><button disabled={saving || selectedDocumentIds.length === 0} onClick={() => void deleteSelectedDocuments()}>批量删除</button></div>}
-    <div className="panel library-table"><div className="table-head"><span>{isSystemAdmin ? "选择 / 资料" : "资料"}</span><span>类别与来源</span><span>可靠性</span><span>状态</span><span>文件日期</span></div>
-      {loading ? <div className="table-empty">正在读取资料数据库…</div> : visibleRecords.length === 0 ? <div className="table-empty">当前筛选范围内没有可见资料。</div> : visibleRecords.map(d => <div className="library-row" key={d.id}>{isSystemAdmin && <input aria-label={`选择 ${d.title}`} type="checkbox" checked={selectedDocumentIds.includes(d.id)} onChange={event => setSelectedDocumentIds(ids => event.target.checked ? [...new Set([...ids, d.id])] : ids.filter(id => id !== d.id))}/>}<button className={selected?.id === d.id ? "selected-row" : ""} onClick={() => { setReviewForm({ resourceCategory: d.resourceCategory || "", sourceOrganization: d.sourceOrganization || "", documentDate: d.documentDate || "", applicableScope: d.applicableScope || "", reliabilityScore: String(d.reliabilityScore || 60), comment: d.reviewNote || "" }); void openRecord(d); }}><span><i>{d.documentType[0]}</i><span><b>{d.title}</b><small>{d.ownerDepartment} · {d.permissionScope}{d.fileName ? ` · ${d.fileName.split(".").pop()?.toUpperCase()} · ${d.parseStatus === "parsed" ? "已解析" : d.parseStatus === "pending_conversion" ? "待转换解析" : "待 OCR"}` : ""}</small></span></span><span>{d.resourceCategory || "未分类"}<small>{d.sourceOrganization || "待补充来源"}</small></span><span>{d.reliabilityScore || 0} 分</span><span><em className={`record-status ${d.resourceStatus}`}>{statusLabel(d.resourceStatus)}</em></span><span>{d.documentDate || "待补充"}</span></button></div>)}
+    {canManageLibrary && <div className="bulk-document-actions"><label><input type="checkbox" checked={visibleRecords.length > 0 && visibleRecords.every(record => selectedDocumentIds.includes(record.id))} onChange={event => setSelectedDocumentIds(event.target.checked ? visibleRecords.map(record => record.id) : [])}/>全选当前页</label><span>已选 {selectedDocumentIds.length} 份</span><button disabled={saving || selectedDocumentIds.length === 0} onClick={() => void deleteSelectedDocuments()}>批量删除</button></div>}
+    <div className="panel library-table"><div className="table-head"><span>{canManageLibrary ? "选择 / 资料" : "资料"}</span><span>类别与来源</span><span>系统可靠性</span><span>状态</span><span>文件日期</span></div>
+      {loading ? <div className="table-empty">正在读取资料数据库…</div> : visibleRecords.length === 0 ? <div className="table-empty">当前筛选范围内没有可见资料。</div> : visibleRecords.map(d => <div className="library-row" key={d.id}>{canManageLibrary && <input aria-label={`选择 ${d.title}`} type="checkbox" checked={selectedDocumentIds.includes(d.id)} onChange={event => setSelectedDocumentIds(ids => event.target.checked ? [...new Set([...ids, d.id])] : ids.filter(id => id !== d.id))}/>}<button className={selected?.id === d.id ? "selected-row" : ""} onClick={() => { void openRecord(d); }}><span><i>{d.documentType[0]}</i><span><b>{d.title}</b><small>{d.ownerDepartment} · {d.permissionScope}{d.fileName ? ` · ${d.fileName.split(".").pop()?.toUpperCase()} · ${d.parseStatus === "parsed" ? "已解析" : d.parseStatus === "pending_conversion" ? "待转换解析" : "待 OCR"}` : ""}</small></span></span><span>{d.resourceCategory || "未分类"}<small>{d.sourceOrganization || "待补充来源"}</small></span><span>系统默认</span><span><em className={`record-status ${d.resourceStatus}`}>{statusLabel(d.resourceStatus)}</em></span><span>{d.documentDate || "待补充"}</span></button></div>)}
     </div>
-    {selected && <section className="panel version-panel"><div className="version-head"><div><strong>{selected.title}</strong><span>版本链 · 原始内容不覆盖</span></div><button onClick={() => { setVersionEditor(!versionEditor); setVersionContent(versions[0]?.content || ""); }}>{versionEditor ? "取消修改" : "＋ 创建新版本"}</button></div>
-      {versionEditor && <div className="version-editor"><label><span>修改说明</span><input value={changeSummary} onChange={e => setChangeSummary(e.target.value)} placeholder="例如：根据2026年第3次办公会意见修订"/></label><label><span>新版本正文</span><textarea value={versionContent} onChange={e => setVersionContent(e.target.value)}/></label><button disabled={saving} onClick={() => void saveVersion()}>{saving ? "正在生成…" : "生成新版本并提交审核"}</button></div>}
+    {selected && <section className="panel version-panel"><div className="version-head"><div><strong>{selected.title}</strong><span>版本链 · 原始内容不覆盖</span></div>{canManageLibrary && <span className="form-actions"><button onClick={() => void editMetadata(selected)}>编辑资料信息</button><button onClick={() => { setVersionEditor(!versionEditor); setVersionContent(versions[0]?.content || ""); }}>{versionEditor ? "取消修改" : "＋ 创建新版本"}</button></span>}</div>
+      {canManageLibrary && versionEditor && <div className="version-editor"><label><span>修改说明</span><input value={changeSummary} onChange={e => setChangeSummary(e.target.value)} placeholder="例如：根据2026年第3次办公会意见修订"/></label><label><span>新版本正文</span><textarea value={versionContent} onChange={e => setVersionContent(e.target.value)}/></label><button disabled={saving} onClick={() => void saveVersion()}>{saving ? "正在生成…" : "生成新版本并自动生效"}</button></div>}
       <div className="version-list">{versions.map(version => <article key={version.id}><b>V{version.versionNo}.0</b><div><strong>{version.changeSummary}</strong><span>{version.createdBy} · {formatDate(version.createdAt)}</span></div><em className={`record-status ${version.versionStatus}`}>{statusLabel(version.versionStatus)}</em></article>)}</div>
-      <div className="resource-metadata"><span>类别：{selected.resourceCategory || "待补充"}</span><span>来源单位：{selected.sourceOrganization || "待补充"}</span><span>适用范围：{selected.applicableScope || "待补充"}</span><span>可靠性：{selected.reliabilityScore || 0} 分</span>{selected.reviewNote && <span>最近审核说明：{selected.reviewNote}</span>}</div>
-      {isSystemAdmin && selected.resourceStatus === "pending_review" && <div className="review-panel"><strong>资料审核</strong><div className="form-grid"><label><span>资料类别 *</span><input value={reviewForm.resourceCategory} onChange={event => setReviewForm(value => ({ ...value, resourceCategory: event.target.value }))}/></label><label><span>来源单位 *</span><input value={reviewForm.sourceOrganization} onChange={event => setReviewForm(value => ({ ...value, sourceOrganization: event.target.value }))}/></label><label><span>文件日期 *</span><input type="date" value={reviewForm.documentDate} onChange={event => setReviewForm(value => ({ ...value, documentDate: event.target.value }))}/></label><label><span>适用范围 *</span><input value={reviewForm.applicableScope} onChange={event => setReviewForm(value => ({ ...value, applicableScope: event.target.value }))}/></label><label><span>可靠性评分 *</span><input type="number" min="0" max="100" value={reviewForm.reliabilityScore} onChange={event => setReviewForm(value => ({ ...value, reliabilityScore: event.target.value }))}/></label><label><span>审核说明</span><input value={reviewForm.comment} onChange={event => setReviewForm(value => ({ ...value, comment: event.target.value }))} placeholder="拒绝时必填"/></label></div><div className="form-actions"><button disabled={saving} onClick={() => void reviewResource(selected, "reject")}>拒绝</button><button disabled={saving} className="submit" onClick={() => void reviewResource(selected, "approve")}>批准</button><button disabled={saving} onClick={() => void changeLifecycle(selected, "archive")}>归档</button></div></div>}
-      {isSystemAdmin && selected.resourceStatus !== "archived" && selected.resourceStatus !== "pending_review" && <div className="form-actions"><button disabled={saving} onClick={() => void changeLifecycle(selected, "archive")}>归档资料</button></div>}
-      {isSystemAdmin && <div className="form-actions"><button disabled={saving} onClick={() => void changeLifecycle(selected, "delete")}>删除资料</button></div>}
+      <div className="resource-metadata"><span>类别：{selected.resourceCategory || "待补充"}</span><span>来源单位：{selected.sourceOrganization || "待补充"}</span><span>适用范围：{selected.applicableScope || "待补充"}</span><span>可靠性：系统默认</span><span>上传时间：{formatDate(selected.createdAt)}</span>{selected.reviewNote && <span>最近审核说明：{selected.reviewNote}</span>}</div>
+      {canManageLibrary && selected.resourceStatus !== "archived" && <div className="form-actions"><button disabled={saving} onClick={() => void changeLifecycle(selected, "archive")}>归档资料</button><button disabled={saving} onClick={() => void changeLifecycle(selected, "delete")}>删除资料</button></div>}
     </section>}
   </section>;
 }

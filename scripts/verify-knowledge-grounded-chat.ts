@@ -8,7 +8,7 @@ const [rag, previewRoute, askRoute] = await Promise.all([
   readFile(new URL("../app/api/knowledge/citations/[documentId]/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/knowledge/ask/route.ts", import.meta.url), "utf8"),
 ]);
-assert(rag.includes('eq(documents.parseStatus, "parsed")') && rag.includes('eq(documents.indexStatus, "ready")') && rag.includes('ne(documents.securityLevel, "D4")') && rag.includes('gte(documents.reliabilityScore, 60)'), "问答检索必须过滤解析状态、D4 和可靠性");
+assert(rag.includes('eq(documents.parseStatus, "parsed")') && rag.includes('eq(documents.indexStatus, "ready")') && rag.includes('ne(documents.securityLevel, "D4")') && !rag.includes('gte(documents.reliabilityScore, 60)'), "问答检索必须过滤解析状态和 D4，且不以人工评分阻断");
 assert(rag.includes("当前无可引用的正式资料，建议补充或检索已批准知识资源。"), "无依据回答必须使用产品指定提示");
 assert(rag.includes('mode: "failed"') && rag.includes("回答服务暂时不可用"), "模型失败不得展示编造回答");
 assert(previewRoute.includes("canReadDocument") && previewRoute.includes('eq(documents.resourceStatus, "approved")') && previewRoute.includes('eq(documents.parseStatus, "parsed")'), "引用预览必须重新执行权限和正式状态校验");

@@ -2,7 +2,7 @@
 import { desc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { knowledgeDatasets, knowledgeImportBatches } from "../../../db/schema";
-import { accessError, requireAccessUser } from "../../../lib/access";
+import { accessError, canManageFormalDocuments, requireAccessUser } from "../../../lib/access";
 
 export const runtime = "edge";
 const trialClasses = new Set(["T1-公开资料", "T2-内部脱敏测试", "T3-部门隔离测试"]);
@@ -11,13 +11,16 @@ const trialClasses = new Set(["T1-公开资料", "T2-内部脱敏测试", "T3-�
 export async function GET(request: Request) {
   try {
     const user = await requireAccessUser(request);
-    if (user.role !== "system_admin") return Response.json({ error: "仅系统管理员可以管理资料批量导入" }, { status: 403 });
+    if (!canManageFormalDocuments(user)) return Response.json({ error: "当前账号无资料批量导入管理权限" }, { status: 403 });
     const url = new URL(request.url);
     const page = Math.max(1, Number(url.searchParams.get("page") || 1));
     const pageSize = Math.min(100, Math.max(1, Number(url.searchParams.get("pageSize") || 20)));
-    const rows = await getDb().select({ batch: knowledgeImportBatches, datasetName: knowledgeDatasets.name })
-      .from(knowledgeImportBatches).leftJoin(knowledgeDatasets, eq(knowledgeImportBatches.datasetId, knowledgeDatasets.id))
-      .orderBy(desc(knowledgeImportBatches.createdAt)).limit(pageSize).offset((page - 1) * pageSize);
+    const query = getDb().select({ batch: knowledgeImportBatches, datasetName: knowledgeDatasets.name })
+      .from(knowledgeImportBatches).leftJoin(knowledgeDatasets, eq(knowledgeImportBatches.datasetId, knowledgeDatasets.id));
+    // 系统管理员可管理全局批次；其余资料管理角色仅看到自己发起的导入，避免泄漏批次文件元数据。
+    const rows = user.role === "system_admin"
+      ? await query.orderBy(desc(knowledgeImportBatches.createdAt)).limit(pageSize).offset((page - 1) * pageSize)
+      : await query.where(eq(knowledgeImportBatches.uploaderUserId, user.id)).orderBy(desc(knowledgeImportBatches.createdAt)).limit(pageSize).offset((page - 1) * pageSize);
     return Response.json({ batches: rows.map(({ batch, datasetName }) => ({ ...batch, datasetName })), page, pageSize });
   } catch (error) { return accessError(error, "读取资料导入批次失败"); }
 }
@@ -26,7 +29,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const user = await requireAccessUser(request);
-    if (user.role !== "system_admin") return Response.json({ error: "仅系统管理员可以管理资料批量导入" }, { status: 403 });
+    if (!canManageFormalDocuments(user)) return Response.json({ error: "当前账号无资料批量导入管理权限" }, { status: 403 });
     const body = await request.json() as Record<string, unknown>;
     const datasetName = String(body.datasetName || "").trim();
     const totalCount = Number(body.totalCount || 0);

@@ -1,8 +1,9 @@
 import { desc, eq } from "drizzle-orm";
 import { getDb } from "../../../../../db";
 import { approvals, auditLogs, documentAcl, documents, documentVersions } from "../../../../../db/schema";
-import { accessError, canReadDocument, requireAccessUser } from "../../../../../lib/access";
+import { accessError, canManageFormalDocuments, canReadDocument, requireAccessUser } from "../../../../../lib/access";
 import { indexDocumentVersion } from "../../../../../lib/ingestion";
+import { indexApprovedDocumentVersion } from "../../../../../lib/vector-indexing";
 import { findBlockedMatches } from "../../../../../lib/upload-control";
 import { DevD1VectorStore } from "../../../../../lib/vector-store";
 
@@ -25,7 +26,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const user = await requireAccessUser(request);
-    if (user.role !== "system_admin") return Response.json({ error: "仅系统管理员可以上传资料新版本" }, { status: 403 });
+    if (!canManageFormalDocuments(user)) return Response.json({ error: "当前账号无资料新版本管理权限" }, { status: 403 });
     const { id } = await context.params;
     const body = (await request.json()) as { content?: string; changeSummary?: string };
     const content = body.content?.trim();
@@ -46,12 +47,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const nextVersion = document.currentVersion + 1;
     const versionId = crypto.randomUUID();
     const operator = user.name;
-    await db.insert(documentVersions).values({ id: versionId, documentId: id, versionNo: nextVersion, content, changeSummary: body.changeSummary?.trim() || "人工修改", versionStatus: "pending", createdBy: operator, createdAt: now });
+    await db.insert(documentVersions).values({ id: versionId, documentId: id, versionNo: nextVersion, content, changeSummary: body.changeSummary?.trim() || "人工修改并自动批准", versionStatus: "approved", createdBy: operator, createdAt: now });
     await indexDocumentVersion(id, versionId, content);
     // 新版本一创建即清除旧向量；直到新版本重新批准并成功生成 Embedding 前，不存在可检索旧版本向量。
     await new DevD1VectorStore().deleteDocumentVectors(id);
-    await db.update(documents).set({ currentVersion: nextVersion, knowledgeStatus: "pending", resourceStatus: "pending_review", vectorStatus: "pending", updatedAt: now }).where(eq(documents.id, id));
-    await db.insert(approvals).values({ id: crypto.randomUUID(), documentId: id, versionId, status: "pending", submittedBy: operator, submittedAt: now });
+    await db.update(documents).set({ currentVersion: nextVersion, knowledgeStatus: "approved", resourceStatus: "approved", vectorStatus: "pending", reliabilityScore: 60, updatedAt: now }).where(eq(documents.id, id));
+    await db.insert(approvals).values({ id: crypto.randomUUID(), documentId: id, versionId, status: "approved", submittedBy: operator, submittedAt: now, reviewer: operator, reviewedAt: now, comment: "新版本解析成功，系统自动批准" });
+    const vectorResult = await indexApprovedDocumentVersion(id, versionId);
+    await db.update(documents).set({ vectorStatus: vectorResult.status, updatedAt: new Date().toISOString() }).where(eq(documents.id, id));
     await db.insert(auditLogs).values({ id: crypto.randomUUID(), action: "提交新版本", entityType: "document", entityId: id, operator, detail: `${document.title}｜V${nextVersion}.0｜${body.changeSummary?.trim() || "人工修改"}`, createdAt: now });
     return Response.json({ ok: true, version: nextVersion }, { status: 201 });
   } catch (error) { return accessError(error, "创建版本失败"); }

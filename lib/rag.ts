@@ -1,4 +1,4 @@
-import { and, eq, ne, gte } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { env } from "cloudflare:workers";
 import { getDb } from "../db";
 import { documentAcl, documentChunks, documents, documentVersions } from "../db/schema";
@@ -55,7 +55,6 @@ export function isFormalEvidenceDocument(document: typeof documents.$inferSelect
     document.parseStatus === "parsed" &&
     document.indexStatus === "ready" &&
     document.securityLevel !== "D4" &&
-    document.reliabilityScore >= 60 &&
     document.currentVersion === versionNo &&
     versionStatus === "approved";
 }
@@ -111,8 +110,8 @@ export async function collectAuthorizedChunks(user: AccessUser) {
     }).from(documentChunks)
       .innerJoin(documents, eq(documentChunks.documentId, documents.id))
       .innerJoin(documentVersions, eq(documentChunks.versionId, documentVersions.id))
-      // 正式检索只读取已批准、有效、非 D4 且可靠性达标的当前版本；其余状态即使已有分段也不会参与评分或模型输入。
-      .where(and(eq(documents.knowledgeStatus, "approved"), eq(documents.resourceStatus, "approved"), eq(documents.lifecycleStatus, "effective"), eq(documents.parseStatus, "parsed"), eq(documents.indexStatus, "ready"), ne(documents.securityLevel, "D4"), gte(documents.reliabilityScore, 60), eq(documentVersions.versionStatus, "approved")))
+      // 正式检索只读取已批准、有效、非 D4 的当前版本；其余状态即使已有分段也不会参与评分或模型输入。
+      .where(and(eq(documents.knowledgeStatus, "approved"), eq(documents.resourceStatus, "approved"), eq(documents.lifecycleStatus, "effective"), eq(documents.parseStatus, "parsed"), eq(documents.indexStatus, "ready"), ne(documents.securityLevel, "D4"), eq(documentVersions.versionStatus, "approved")))
       .limit(3000),
   ]);
   return selectAuthorizedChunks(user, rows, grants);
@@ -165,7 +164,7 @@ async function retrieveVectorWithinScope(
   const embedding = await embedTexts(config, [query]);
   if (embedding.status !== "success") return { status: embedding.status, evidence: [] };
 
-  // 调用向量存储前 scope 已同时完成 approved/effective/current/parsed/reliability/D4 与 ACL 过滤。
+  // 调用向量存储前 scope 已同时完成 approved/effective/current/parsed/D4 与 ACL 过滤。
   const hits = await (options.store || new DevD1VectorStore()).searchVectors({
     queryVector: embedding.vectors[0],
     allowedChunkIds: scopedRows.map((row) => row.chunk.id),

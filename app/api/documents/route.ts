@@ -1,8 +1,9 @@
 import { desc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { approvals, auditLogs, documentAcl, documents, documentVersions } from "../../../db/schema";
-import { accessError, canReadDocument, requireAccessUser } from "../../../lib/access";
+import { accessError, canManageFormalDocuments, canReadDocument, requireAccessUser } from "../../../lib/access";
 import { indexDocumentVersion } from "../../../lib/ingestion";
+import { indexApprovedDocumentVersion } from "../../../lib/vector-indexing";
 import { findBlockedMatches } from "../../../lib/upload-control";
 
 export const runtime = "edge";
@@ -24,7 +25,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const user = await requireAccessUser(request);
-    if (user.role !== "system_admin") return Response.json({ error: "仅系统管理员可以录入知识资源" }, { status: 403 });
+    if (!canManageFormalDocuments(user)) return Response.json({ error: "当前账号无知识资源录入权限" }, { status: 403 });
     const body = (await request.json()) as Record<string, string | boolean>;
     const title = String(body.title || "").trim();
     const content = String(body.content || "").trim();
@@ -61,23 +62,25 @@ export async function POST(request: Request) {
     const versionId = crypto.randomUUID();
     const approvalId = crypto.randomUUID();
     const operator = user.name;
-    const status = body.submitMode === "draft" ? "draft" : "pending";
+    const status = "approved";
     const ownerDepartment = user.positionLevel >= 4 ? String(body.ownerDepartment || user.departmentName) : user.departmentName;
 
     await db.insert(documents).values({
       id: documentId, title, documentType: String(body.documentType || "其他资料"), sourceType: String(body.sourceType || "人工录入"),
       sourceRef: String(body.sourceRef || "") || null, ownerDepartment, securityLevel, permissionScope,
-      lifecycleStatus: "effective", trialDataClass, isTrialData: true, resourceStatus: status === "draft" ? "draft" : "pending_review", resourceCategory: String(body.resourceCategory || body.documentType || "其他"),
-      sourceOrganization: String(body.sourceOrganization || "").trim() || null, documentDate: String(body.documentDate || "").trim() || null, applicableScope: String(body.applicableScope || "").trim() || null, reliabilityScore: Number(body.reliabilityScore) || 0, knowledgeStatus: status, currentVersion: 1,
+      lifecycleStatus: "effective", trialDataClass, isTrialData: true, resourceStatus: "approved", resourceCategory: String(body.resourceCategory || body.documentType || "其他"),
+      sourceOrganization: String(body.sourceOrganization || "").trim() || null, documentDate: String(body.documentDate || "").trim() || null, applicableScope: String(body.applicableScope || "").trim() || null, reliabilityScore: 60, knowledgeStatus: status, currentVersion: 1,
       createdBy: operator, createdByUserId: user.id, createdAt: now, updatedAt: now,
     });
     await db.insert(documentVersions).values({
-      id: versionId, documentId, versionNo: 1, content, changeSummary: "首次入库", versionStatus: status, createdBy: operator, createdAt: now,
+      id: versionId, documentId, versionNo: 1, content, changeSummary: "首次入库并自动批准", versionStatus: status, createdBy: operator, createdAt: now,
     });
     const chunkCount = await indexDocumentVersion(documentId, versionId, content);
-    if (status === "pending") await db.insert(approvals).values({ id: approvalId, documentId, versionId, status: "pending", submittedBy: operator, submittedAt: now });
+    await db.insert(approvals).values({ id: approvalId, documentId, versionId, status: "approved", submittedBy: operator, submittedAt: now, reviewer: operator, reviewedAt: now, comment: "录入成功，系统自动批准" });
+    const vectorResult = await indexApprovedDocumentVersion(documentId, versionId);
+    await db.update(documents).set({ vectorStatus: vectorResult.status, updatedAt: new Date().toISOString() }).where(eq(documents.id, documentId));
     await db.insert(auditLogs).values({
-      id: crypto.randomUUID(), action: status === "pending" ? "提交审核" : "保存草稿", entityType: "document", entityId: documentId,
+      id: crypto.randomUUID(), action: "录入并自动批准", entityType: "document", entityId: documentId,
       operator, detail: `${title}｜${trialDataClass}｜${securityLevel}｜${permissionScope}｜${ownerDepartment}｜${chunkCount}个检索片段`, createdAt: now,
     });
 

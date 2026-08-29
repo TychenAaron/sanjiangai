@@ -37,7 +37,7 @@ export async function extractUpload(file: File) {
     throw new Error("仅支持 DOCX、PDF、TXT、MD、XLSX、XLS、PPTX 和 PPT 文件");
   }
   if (file.size <= 0) throw new Error("上传文件为空");
-  if (file.size > 8 * 1024 * 1024) throw new Error("单个试用文件不得超过8MB");
+  // 不设业务固定大小阈值；运行环境仍可能实施独立请求体保护，超限会在进入解析前被拒绝。
   const buffer = await file.arrayBuffer();
   const bytes = new Uint8Array(buffer);
   const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b;
