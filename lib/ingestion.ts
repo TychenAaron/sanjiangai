@@ -1,46 +1,26 @@
 import { eq } from "drizzle-orm";
-import { strFromU8, unzipSync } from "fflate";
 import { getDb } from "../db";
 import { documentChunks } from "../db/schema";
-import { parseWritingReference } from "./writing-reference-parser";
+import { parseDocument } from "./document-parser";
+import { parseWithOcr } from "./ocr-client";
 
 const MAX_EXTRACTED_CHARS = 600_000;
 const CHUNK_MAX_CHARS = 520;
 const LONG_PARAGRAPH_PIECE_CHARS = 420;
 
-function decodeXml(value: string) {
-  return value
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
-}
-
 function normalizeText(value: string) {
   return value.replace(/\r/g, "").replace(/[\t ]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-function extractDocx(bytes: Uint8Array) {
-  const files = unzipSync(bytes);
-  const documentXml = files["word/document.xml"];
-  if (!documentXml) throw new Error("该Word文件缺少正文，暂时无法解析");
-  const xml = strFromU8(documentXml);
-  return normalizeText(decodeXml(xml
-    .replace(/<w:tab\/?[^>]*>/g, "\t")
-    .replace(/<w:br\/?[^>]*>/g, "\n")
-    .replace(/<\/w:p>/g, "\n")
-    .replace(/<[^>]+>/g, "")));
-}
-
-export async function extractUpload(file: File) {
-  const extension = file.name.split(".").pop()?.toLowerCase() || "";
+/** 上传预检与统一解析。输入为浏览器文件，输出为原字节、标准正文、结构块和真实解析状态；不写 D1/R2。 */
+export async function extractDocumentBytes(input: { fileName: string; mimeType?: string; buffer: ArrayBuffer }) {
+  const extension = input.fileName.split(".").pop()?.toLowerCase() || "";
   if (!new Set(["txt", "md", "docx", "pdf", "xlsx", "xls", "pptx", "ppt"]).has(extension)) {
     throw new Error("仅支持 DOCX、PDF、TXT、MD、XLSX、XLS、PPTX 和 PPT 文件");
   }
-  if (file.size <= 0) throw new Error("上传文件为空");
+  if (input.buffer.byteLength <= 0) throw new Error("上传文件为空");
   // 不设业务固定大小阈值；运行环境仍可能实施独立请求体保护，超限会在进入解析前被拒绝。
-  const buffer = await file.arrayBuffer();
+  const buffer = input.buffer;
   const bytes = new Uint8Array(buffer);
   const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b;
   const isCompoundOffice = bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0;
@@ -49,14 +29,19 @@ export async function extractUpload(file: File) {
   if (["docx", "xlsx", "pptx"].includes(extension) && !isZip) throw new Error("文件扩展名与 Office 文件格式不匹配");
   if (["xls", "ppt"].includes(extension) && !isCompoundOffice) throw new Error("文件扩展名与旧版 Office 文件格式不匹配");
   if (extension === "pdf" && !isPdf) throw new Error("文件扩展名与 PDF 文件格式不匹配");
-  if (extension === "docx") extractDocx(bytes);
-  // 正式资料与私有参考共用经过验证的 Office 解析器，避免同一格式在两条上传链路中出现不同结果。
-  const parsed = await parseWritingReference({ fileName: file.name, mimeType: file.type, buffer });
+  let parsed = await parseDocument({ fileName: input.fileName, mimeType: input.mimeType, buffer });
+  // 扫描 PDF 先走本地文本提取；没有文本时才调用项目内 OCR 服务，服务不可用时保持待 OCR 而不伪造成功。
+  if (extension === "pdf" && parsed.status === "pending_ocr") parsed = await parseWithOcr({ fileName: input.fileName, mimeType: input.mimeType, buffer });
   if (parsed.status === "failed") throw new Error("文件损坏、伪造扩展名或无法解析");
-  const content = normalizeText(parsed.text);
+  const content = normalizeText(parsed.plainText);
   if (parsed.status === "parsed" && !content) throw new Error("没有从文件中识别到可用正文");
   if (content.length > MAX_EXTRACTED_CHARS) throw new Error("文件正文过长，请拆分后上传");
-  return { buffer, content, extension, parseStatus: parsed.status, parseReason: parsed.reason || null, locations: parsed.locations };
+  return { buffer, content, extension, parseStatus: parsed.status, parseReason: parsed.reason || null, locations: parsed.metadata.locations, structuredBlocks: parsed.structuredBlocks };
+}
+
+/** 上传适配器：输入浏览器 File，输出统一解析结果；不写 D1/R2，便于单文件与批量上传复用。 */
+export async function extractUpload(file: File) {
+  return extractDocumentBytes({ fileName: file.name, mimeType: file.type, buffer: await file.arrayBuffer() });
 }
 
 export function splitIntoChunks(input: string) {
@@ -82,9 +67,13 @@ export function splitIntoChunks(input: string) {
   return chunks.slice(0, 800);
 }
 
-export async function indexDocumentVersion(documentId: string, versionId: string, content: string) {
+/**
+ * 将统一解析正文切为可检索 chunks。
+ * 输入为文档、版本、正文和可选资料标题；输出为写入的 chunk 数。标题被写入每个 chunk 的上下文，不改变 ACL 或生命周期。
+ */
+export async function indexDocumentVersion(documentId: string, versionId: string, content: string, options: { title?: string } = {}) {
   const db = getDb();
-  const chunks = splitIntoChunks(content);
+  const chunks = splitIntoChunks(content).map((chunk) => options.title ? `资料标题：${options.title}\n${chunk}` : chunk);
   await db.delete(documentChunks).where(eq(documentChunks.versionId, versionId));
   if (chunks.length) {
     const now = new Date().toISOString();

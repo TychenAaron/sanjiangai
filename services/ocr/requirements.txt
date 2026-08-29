@@ -1,0 +1,7 @@
+# 三江集团内置 OCR 服务依赖。PaddlePaddle 轮子与 Python/CPU/GPU 平台相关，具体安装方式见 README。
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+PyMuPDF==1.25.5
+paddleocr==2.9.1
+paddlepaddle==2.6.2

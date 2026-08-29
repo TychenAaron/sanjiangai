@@ -2,6 +2,7 @@
 import { eq, inArray } from "drizzle-orm";
 import { getDb } from "../db";
 import { documentEmbeddings } from "../db/schema";
+import { splitVectorLookupChunkIds } from "./vector-lookup-batches";
 
 export type VectorRecord = {
   id: string;
@@ -79,9 +80,8 @@ export class DevD1VectorStore implements VectorStore {
     if (!validVector(queryVector) || !allowedChunkIds.length || topK <= 0) return [];
     const db = getDb();
     const rows = [] as Array<typeof documentEmbeddings.$inferSelect>;
-    // SQLite 参数数量有限，按小批次查询；每一批仍由上层已授权 chunk ID 严格限定。
-    for (let offset = 0; offset < allowedChunkIds.length; offset += 400) {
-      const ids = allowedChunkIds.slice(offset, offset + 400);
+    // SQLite 参数数量有限，按 D1 安全批次查询；每一批仍由上层已授权 chunk ID 严格限定。
+    for (const ids of splitVectorLookupChunkIds(allowedChunkIds)) {
       rows.push(...await db.select().from(documentEmbeddings).where(inArray(documentEmbeddings.chunkId, ids)));
     }
     return rows

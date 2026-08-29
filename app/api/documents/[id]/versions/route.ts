@@ -48,7 +48,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const versionId = crypto.randomUUID();
     const operator = user.name;
     await db.insert(documentVersions).values({ id: versionId, documentId: id, versionNo: nextVersion, content, changeSummary: body.changeSummary?.trim() || "人工修改并自动批准", versionStatus: "approved", createdBy: operator, createdAt: now });
-    await indexDocumentVersion(id, versionId, content);
+    await indexDocumentVersion(id, versionId, content, { title: document.title });
     // 新版本一创建即清除旧向量；直到新版本重新批准并成功生成 Embedding 前，不存在可检索旧版本向量。
     await new DevD1VectorStore().deleteDocumentVectors(id);
     await db.update(documents).set({ currentVersion: nextVersion, lifecycleStatus: "effective", knowledgeStatus: "approved", resourceStatus: "approved", indexStatus: "ready", vectorStatus: "pending", reliabilityScore: 0, updatedAt: now }).where(eq(documents.id, id));

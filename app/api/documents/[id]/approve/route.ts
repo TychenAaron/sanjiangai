@@ -33,7 +33,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }
     if (decision === "rejected" && !String(body.comment || "").trim()) return Response.json({ error: "拒绝资料时必须填写简短审核理由" }, { status: 400 });
     const reviewer = user.name;
-    const chunkCount = await indexDocumentVersion(id, version.id, version.content);
+    const chunkCount = await indexDocumentVersion(id, version.id, version.content, { title: doc.title });
     await db.update(documents).set({ knowledgeStatus: decision, resourceStatus: decision, resourceCategory: category || doc.resourceCategory, sourceOrganization: sourceOrganization || doc.sourceOrganization, documentDate: documentDate || doc.documentDate, applicableScope: applicableScope || doc.applicableScope, reliabilityScore: Number.isFinite(reliabilityScore) ? reliabilityScore : doc.reliabilityScore, reviewNote: body.comment || null, vectorStatus: decision === "approved" ? "pending" : "disabled", updatedAt: now }).where(eq(documents.id, id));
     await db.update(documentVersions).set({ versionStatus: decision }).where(eq(documentVersions.id, version.id));
     await db.update(approvals).set({ status: decision, reviewer, comment: body.comment || (decision === "approved" ? "审核通过，可进入正式知识层" : "退回修改"), reviewedAt: now })

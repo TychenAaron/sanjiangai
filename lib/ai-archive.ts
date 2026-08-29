@@ -35,7 +35,7 @@ export async function formalizeWritingArtifact(user: AccessUser, artifactId: str
     createdBy: user.name, createdByUserId: user.id, createdAt: now, updatedAt: now,
   });
   await db.insert(documentVersions).values({ id: versionId, documentId, versionNo: 1, content: artifact.content, changeSummary: "由受控 Writing Artifact 正式化提交", versionStatus: "pending", createdBy: user.name, createdAt: now });
-  await indexDocumentVersion(documentId, versionId, artifact.content);
+  await indexDocumentVersion(documentId, versionId, artifact.content, { title: artifact.title });
   await db.insert(approvals).values({ id: approvalId, documentId, versionId, status: "pending", submittedBy: user.name, submittedAt: now });
   await db.insert(auditLogs).values({ id: auditId, action: "正式化写作成果", entityType: "formal_artifact", entityId: formalId, operator: user.name, detail: `sourceWritingArtifact=${artifact.id}; knowledgeDocument=${documentId}; status=pending_review`, createdAt: now });
   await db.insert(formalArtifacts).values({ id: formalId, sourceWritingArtifactId: artifact.id, ownerUserId: artifact.ownerUserId, ownerDepartment: artifact.ownerDepartment, title: writing.title, status: "pending_review", formalizedByUserId: user.id, formalizedBy: user.name, formalizedAt: now, knowledgeDocumentId: documentId, knowledgeVersionId: versionId, auditLogId: auditId, createdAt: now, updatedAt: now });

@@ -1,21 +1,22 @@
 // 治理后台模型连接配置：负责校验、凭证加密、脱敏展示和 OpenAI-compatible 连通性检测，不记录密钥、提示词或业务正文。
-export const MODEL_PURPOSES = ["MAIN_MODEL", "EMBEDDING", "RERANKER"] as const;
+// OCR 服务与模型网关共用受控连接配置表，但不参与聊天、向量或重排模型的业务逻辑。
+export const MODEL_PURPOSES = ["MAIN_MODEL", "EMBEDDING", "RERANKER", "OCR"] as const;
 export type ModelPurpose = typeof MODEL_PURPOSES[number];
-export type ModelConnectorInput = { purpose: ModelPurpose; baseUrl: string; model: string; apiKey?: string; timeoutMs?: number; endpointPath?: string; enabled?: boolean };
+export type ModelConnectorInput = { purpose: ModelPurpose; baseUrl: string; model?: string; apiKey?: string; timeoutMs?: number; endpointPath?: string; enabled?: boolean };
 
 const MAX_TIMEOUT_MS = 120_000;
 
 /** 校验管理员提交的模型连接配置；只允许 HTTP(S) 网关，禁止把凭证嵌入 URL。 */
 export function validateModelConnectorInput(input: ModelConnectorInput) {
-  if (!MODEL_PURPOSES.includes(input.purpose) || !input.baseUrl?.trim() || !input.model?.trim()) throw new Error("model_config_invalid");
+  if (!MODEL_PURPOSES.includes(input.purpose) || !input.baseUrl?.trim() || (input.purpose !== "OCR" && !input.model?.trim())) throw new Error("model_config_invalid");
   let parsed: URL;
   try { parsed = new URL(input.baseUrl.trim()); } catch { throw new Error("model_config_invalid"); }
   if (!/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password) throw new Error("model_config_invalid");
   const timeout = Number(input.timeoutMs ?? 15_000);
   if (!Number.isFinite(timeout) || timeout < 500 || timeout > MAX_TIMEOUT_MS) throw new Error("model_config_invalid");
-  const endpointPath = (input.endpointPath || "/rerank").trim();
-  if (input.purpose === "RERANKER" && (!endpointPath.startsWith("/") || endpointPath.includes("://"))) throw new Error("model_config_invalid");
-  return { baseUrl: parsed.toString().replace(/\/$/, ""), model: input.model.trim(), timeoutMs: Math.round(timeout), endpointPath: input.purpose === "RERANKER" ? endpointPath : null };
+  const endpointPath = (input.endpointPath || (input.purpose === "OCR" ? "/ocr" : "/rerank")).trim();
+  if ((input.purpose === "RERANKER" || input.purpose === "OCR") && (!endpointPath.startsWith("/") || endpointPath.includes("://"))) throw new Error("model_config_invalid");
+  return { baseUrl: parsed.toString().replace(/\/$/, ""), model: input.purpose === "OCR" ? "PaddleOCR" : input.model!.trim(), timeoutMs: Math.round(timeout), endpointPath: input.purpose === "RERANKER" || input.purpose === "OCR" ? endpointPath : null };
 }
 
 function toBase64(bytes: Uint8Array) { return btoa(String.fromCharCode(...bytes)); }
@@ -58,19 +59,19 @@ export async function testModelConnector(config: { purpose: ModelPurpose; baseUr
   if (!config.enabled || !config.baseUrl || !config.model) return { status: "UNCONFIGURED", httpStatus: null, durationMs: 0 };
   const controller = new AbortController(); const startedAt = Date.now(); const timer = setTimeout(() => controller.abort(), config.timeoutMs);
   try {
-    const path = config.purpose === "MAIN_MODEL" ? "/chat/completions" : config.purpose === "EMBEDDING" ? "/embeddings" : (config.endpointPath || "/rerank");
+    const path = config.purpose === "MAIN_MODEL" ? "/chat/completions" : config.purpose === "EMBEDDING" ? "/embeddings" : config.purpose === "OCR" ? "/health" : (config.endpointPath || "/rerank");
     const body = config.purpose === "MAIN_MODEL" ? { model: config.model, messages: [{ role: "user", content: "只回复：MODEL_OK" }], max_tokens: 8 }
       : config.purpose === "EMBEDDING" ? { model: config.model, input: ["连接检测"] }
         : { model: config.model, query: "连接检测", documents: ["测试候选资料"] };
-    const response = await gatewayFetch(`${config.baseUrl}${path}`, { method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) }, body: JSON.stringify(body) });
+    const response = await gatewayFetch(`${config.baseUrl}${path}`, config.purpose === "OCR" ? { method: "GET", signal: controller.signal, headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {} } : { method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) }, body: JSON.stringify(body) });
     const durationMs = Date.now() - startedAt;
     if (response.status === 401 || response.status === 403) return { status: "AUTH_FAILED", httpStatus: response.status, durationMs };
     if (!response.ok) return { status: "HTTP_ERROR", httpStatus: response.status, durationMs };
     let data: unknown; try { data = await response.json(); } catch { return { status: "INVALID_RESPONSE", httpStatus: response.status, durationMs }; }
-    const payload = data as { choices?: Array<{ message?: { content?: unknown } }>; data?: Array<{ embedding?: unknown }>; results?: unknown };
+    const payload = data as { choices?: Array<{ message?: { content?: unknown } }>; data?: Array<{ embedding?: unknown }>; results?: unknown; ready?: unknown };
     const valid = config.purpose === "MAIN_MODEL" ? typeof payload.choices?.[0]?.message?.content === "string" && payload.choices[0].message.content.trim().length > 0
       : config.purpose === "EMBEDDING" ? Array.isArray(payload.data) && Array.isArray(payload.data[0]?.embedding) && payload.data[0].embedding.length > 0
-        : Array.isArray(payload.results) && payload.results.length > 0;
+        : config.purpose === "OCR" ? payload.ready === true : Array.isArray(payload.results) && payload.results.length > 0;
     return { status: valid ? "CONNECTED" : "INVALID_RESPONSE", httpStatus: response.status, durationMs };
   } catch (error) { return { status: error instanceof DOMException && error.name === "AbortError" ? "TIMEOUT" : "HTTP_ERROR", httpStatus: null, durationMs: Date.now() - startedAt }; }
   finally { clearTimeout(timer); }

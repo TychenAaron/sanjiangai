@@ -80,7 +80,7 @@ export async function POST(request: Request) {
     await db.insert(documentVersions).values({
       id: versionId, documentId, versionNo: 1, content, changeSummary: "首次入库并自动批准", versionStatus: status, createdBy: operator, createdAt: now,
     });
-    const chunkCount = await indexDocumentVersion(documentId, versionId, content);
+    const chunkCount = await indexDocumentVersion(documentId, versionId, content, { title });
     await db.insert(approvals).values({ id: approvalId, documentId, versionId, status: "approved", submittedBy: operator, submittedAt: now, reviewer: operator, reviewedAt: now, comment: "录入成功，系统自动批准" });
     const vectorResult = await indexApprovedDocumentVersion(documentId, versionId);
     await db.update(documents).set({ vectorStatus: vectorResult.status, updatedAt: new Date().toISOString() }).where(eq(documents.id, documentId));

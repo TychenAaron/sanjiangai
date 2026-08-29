@@ -86,7 +86,7 @@ export async function POST(request: Request) {
       reliabilityScore: 0, knowledgeStatus: "approved", currentVersion: 1, createdBy: user.name, createdByUserId: user.id, datasetId: batch?.datasetId || null, importBatchId: batch?.id || null, createdAt: now, updatedAt: now,
     });
     await db.insert(documentVersions).values({ id: versionId, documentId, versionNo: 1, content, changeSummary: isParsed ? "文件首次上传、解析并自动批准" : `文件已自动批准，${parseReason || "等待后续解析"}`, versionStatus: "approved", createdBy: user.name, createdAt: now });
-    const chunkCount = await indexDocumentVersion(documentId, versionId, content);
+    const chunkCount = await indexDocumentVersion(documentId, versionId, content, { title });
     await db.insert(approvals).values({ id: crypto.randomUUID(), documentId, versionId, status: "approved", submittedBy: user.name, submittedAt: now, reviewer: user.name, reviewedAt: now, comment: isParsed ? "上传解析成功，系统自动批准" : `上传成功，系统自动批准；${parseReason || "等待后续解析"}` });
     const vectorResult = isParsed ? await indexApprovedDocumentVersion(documentId, versionId) : { status: "pending", count: 0 };
     if (isParsed) await db.update(documents).set({ vectorStatus: vectorResult.status, updatedAt: new Date().toISOString() }).where(eq(documents.id, documentId));

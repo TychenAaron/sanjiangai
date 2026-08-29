@@ -54,7 +54,8 @@ const [rag, approvalRoute, lifecycleRoute, versionRoute] = await Promise.all([
   readFile(new URL("../app/api/documents/[id]/lifecycle/route.ts", import.meta.url), "utf8"),
   readFile(new URL("../app/api/documents/[id]/versions/route.ts", import.meta.url), "utf8"),
 ]);
-assert(rag.includes('document.knowledgeStatus === "approved"') && rag.includes('document.lifecycleStatus === "effective"') && rag.includes('document.parseStatus === "parsed"') && rag.includes('document.securityLevel !== "D4"') && rag.includes('document.reliabilityScore >= 60') && rag.includes('document.currentVersion === versionNo'), "向量 scope 必须过滤 approved/effective/parsed/D4/可靠性/current");
+// 当前上传生命周期以自动批准后的正式状态作为门槛，不再要求人工 reliability 评分；仍必须保留版本、解析、索引、D4 与 ACL 前置过滤。
+assert(rag.includes('document.knowledgeStatus === "approved"') && rag.includes('document.resourceStatus === "approved"') && rag.includes('document.lifecycleStatus === "effective"') && rag.includes('document.parseStatus === "parsed"') && rag.includes('document.indexStatus === "ready"') && rag.includes('document.securityLevel !== "D4"') && rag.includes('document.currentVersion === versionNo') && rag.includes('versionStatus === "approved"'), "向量 scope 必须过滤 approved/effective/parsed/index/D4/current");
 assert(rag.indexOf("selectAuthorizedChunks") < rag.indexOf("searchVectors") && rag.includes("canReadDocument(user, row.document, grants)") && rag.includes("allowedChunkIds: scopedRows.map"), "必须先计算当前用户允许范围，再调用向量存储");
 assert(rag.includes("const rows = await collectAuthorizedChunks(user);") && !rag.includes("canReadDocument(user,row.document, grants)"), "关键词检索必须复用已授权 scope，不能引用失效的局部权限变量");
 assert(approvalRoute.includes("indexApprovedDocumentVersion") && lifecycleRoute.includes("deleteDocumentVectors") && versionRoute.includes("deleteDocumentVectors"), "批准、新版本和生命周期清理必须联动向量索引");

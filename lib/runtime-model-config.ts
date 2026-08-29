@@ -37,3 +37,20 @@ export async function resolveRetrievalModelRuntime(fallback: Record<string, stri
     ? { ...fallback, EMBEDDING_BASE_URL: config.baseUrl, EMBEDDING_MODEL: config.model, EMBEDDING_API_KEY: config.apiKey, EMBEDDING_TIMEOUT_MS: String(config.timeoutMs) }
     : { ...fallback, RERANKER_BASE_URL: config.baseUrl, RERANKER_MODEL: config.model, RERANKER_API_KEY: config.apiKey, RERANKER_TIMEOUT_MS: String(config.timeoutMs), RERANKER_PATH: config.endpointPath || "/rerank" };
 }
+
+/**
+ * 读取 OCR 服务运行时配置。优先级为 D1 管理员配置、Worker/process 环境变量、项目内本地默认地址。
+ * 输入为环境变量回退值，输出只供服务端 OCR 客户端使用，绝不下发凭证到浏览器。
+ */
+export async function resolveOcrRuntime(fallback: Record<string, string | undefined>) {
+  const config = await readRuntimeModelOverride("OCR");
+  if (config) return { baseUrl: config.baseUrl, endpointPath: config.endpointPath || "/ocr", apiKey: config.apiKey, timeoutMs: config.timeoutMs, enabled: config.enabled };
+  const timeoutMs = Number(fallback.OCR_TIMEOUT_MS || 60_000);
+  return {
+    baseUrl: fallback.OCR_BASE_URL || "http://127.0.0.1:8765",
+    endpointPath: fallback.OCR_ENDPOINT || "/ocr",
+    apiKey: fallback.OCR_API_KEY || "",
+    timeoutMs: Number.isFinite(timeoutMs) ? Math.min(Math.max(timeoutMs, 500), 120_000) : 60_000,
+    enabled: fallback.OCR_ENABLED !== "false",
+  };
+}
