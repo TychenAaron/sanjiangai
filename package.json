@@ -47,7 +47,8 @@
     "verify:local:admin-batch-knowledge-ingestion": "node --experimental-strip-types scripts/verify-local-admin-batch-knowledge-ingestion.ts",
     "verify:library-bulk-delete-ui": "node --experimental-strip-types scripts/verify-library-bulk-delete-ui.ts",
     "verify:local:library-bulk-delete": "node --experimental-strip-types scripts/verify-local-library-bulk-delete.ts",
-    "verify:chinese-keyword-retrieval": "node --experimental-strip-types scripts/verify-chinese-keyword-retrieval.ts"
+    "verify:chinese-keyword-retrieval": "node --experimental-strip-types scripts/verify-chinese-keyword-retrieval.ts",
+    "verify:writing-recipient-options": "node --experimental-strip-types scripts/verify-writing-recipient-options.ts"
   },
   "dependencies": {
     "@mdgate/ppt": "0.6.20",

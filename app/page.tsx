@@ -41,6 +41,7 @@ type WritingBlock =
   | { id: string; type: "numbered_list"; items: string[] }
   | { id: string; type: "table"; columns: string[]; rows: string[][] };
 type StructuredWriting = { title: string; documentType: "请示" | "通知" | "工作情况汇报"; recipient: string; submittingDepartment: string; dateLabel: string; blocks: WritingBlock[] };
+type WritingRecipientOption = { id: string; name: string; enabled: boolean; sortOrder: number; createdBy: string; createdAt: string; updatedAt: string };
 
 // 根据文件扩展名返回紧凑附件卡片的 CSS 图形标识，不影响上传、解析或权限判断。
 function privateReferenceKind(fileName: string) {
@@ -448,7 +449,9 @@ function PolicyCenter() {
 const CURRENT_WRITING_WORKSPACE_KEY = "sanjiang-current-writing-workspace";
 
 function WritingV2() {
-  const [form, setForm] = useState({ documentType: "请示", title: "", recipient: "", facts: "", referenceQuery: "" });
+  const [form, setForm] = useState({ documentType: "请示", title: "", recipient: "", recipientOptionId: "", facts: "", referenceQuery: "" });
+  const [recipientOptions, setRecipientOptions] = useState<WritingRecipientOption[]>([]);
+  const [recipientOptionsLoading, setRecipientOptionsLoading] = useState(true);
   const [writing, setWriting] = useState<{ id: string; outline: string; references: KnowledgeResult["citations"]; privateReferences: WritingPrivateReference[]; checks: string[] } | null>(null);
   const [structuredContent, setStructuredContent] = useState<StructuredWriting | null>(null);
   const [plainContent, setPlainContent] = useState("");
@@ -461,9 +464,23 @@ function WritingV2() {
   const privateReferenceInput = useRef<HTMLInputElement>(null);
   const structuredEditorRef = useRef<HTMLDivElement>(null);
 
+  // 说明：第一阶段只读取管理员启用的对象配置。浏览器仅用于展示；开始生成时服务端会再次校验 ID 与启用状态。
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const response = await fetch("/api/writing/recipient-options", { cache: "no-store" });
+        const data = await response.json() as { options?: WritingRecipientOption[] };
+        if (active && response.ok) setRecipientOptions(data.options || []);
+      } finally { if (active) setRecipientOptionsLoading(false); }
+    })();
+    return () => { active = false; };
+  }, []);
+
   // 说明：创建提纲时只使用已确认事实、正式知识库授权引用和当前工作区私有参考材料摘要，不自动发文。
   async function createOutline() {
     if (generating) return;
+    if (!form.recipientOptionId) { setNotice("请选择报送/发送对象"); return; }
     setGenerating(true);
     setNotice("");
     try {
@@ -670,7 +687,12 @@ function WritingV2() {
         <div className="large-types">{["请示", "通知", "工作情况汇报"].map((type) => <button className={form.documentType === type ? "active" : ""} onClick={() => { setForm({ ...form, documentType: type }); setStructuredContent((previous) => previous ? { ...previous, documentType: type as StructuredWriting["documentType"] } : previous); }} key={type}><strong>{type}</strong></button>)}</div>
         <div className="writing-editor-headings">
           <label><span>标题 *</span><input value={form.title} onChange={(e) => { setForm({ ...form, title: e.target.value }); setStructuredContent((previous) => previous ? { ...previous, title: e.target.value } : previous); }}/></label>
-          <label><span>报送/发送对象</span><input value={form.recipient} onChange={(e) => { setForm({ ...form, recipient: e.target.value }); setStructuredContent((previous) => previous ? { ...previous, recipient: e.target.value } : previous); }}/></label>
+          <label><span>报送/发送对象 *</span><select value={form.recipientOptionId} disabled={recipientOptionsLoading} onChange={(event) => {
+            const option = recipientOptions.find((item) => item.id === event.target.value);
+            const recipient = option?.name || "";
+            setForm({ ...form, recipientOptionId: event.target.value, recipient });
+            setStructuredContent((previous) => previous ? { ...previous, recipient } : previous);
+          }}><option value="">{recipientOptionsLoading ? "正在读取可选对象…" : recipientOptions.length ? "请选择报送/发送对象" : "暂无可选对象，请联系管理员维护"}</option>{recipientOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label>
         </div>
       </div>
       {writing && <button className="writing-settings-toggle" type="button" onClick={() => setShowOutlineSettings(!showOutlineSettings)}>{showOutlineSettings ? "收起提纲与依据设置" : "重新显示提纲与依据设置"}</button>}
@@ -1055,6 +1077,7 @@ function Admin({ user, records, summary, refresh }: { user: SessionUser | null; 
     ].map(x => <button className="panel" key={x[0]}><span><strong>{x[0]}</strong><small>{x[1]}</small></span><em>{x[2]}</em><Icon name="arrow" size={17}/></button>)}</div>
     {message && <div className="notice admin-notice">{message}</div>}
     <OaConnectorAdmin isSystemAdmin={user?.role === "system_admin"}/>
+    <WritingRecipientOptionsAdmin isSystemAdmin={user?.role === "system_admin"}/>
     {canManageRules && <section className="panel upload-control-panel"><div className="control-head"><div><h2>禁止上传词条库</h2><p>命中规则时，系统在保存原文件之前拒绝上传，并记录操作账号、文件名和命中词条。</p></div><b>{blockedTerms.filter(item => item.enabled).length}条生效中</b></div>
       <div className="rule-form"><label><span>禁止词条 *</span><input value={ruleForm.term} onChange={event => setRuleForm({ ...ruleForm, term: event.target.value })} placeholder="例如：某保密项目代号"/></label><label><span>分类</span><select value={ruleForm.category} onChange={event => setRuleForm({ ...ruleForm, category: event.target.value })}><option>涉密与敏感事项</option><option>个人隐私</option><option>财务与合同敏感信息</option><option>账号口令与密钥</option><option>自定义禁止项</option></select></label><label><span>检查范围</span><select value={ruleForm.matchScope} onChange={event => setRuleForm({ ...ruleForm, matchScope: event.target.value })}><option value="all">文件名＋标题＋正文</option><option value="filename">仅文件名和标题</option><option value="content">仅正文</option></select></label><label><span>管理备注</span><input value={ruleForm.note} onChange={event => setRuleForm({ ...ruleForm, note: event.target.value })} placeholder="填写设置原因或批准人"/></label><button disabled={working === "new-rule"} onClick={() => void addBlockedTerm()}>{working === "new-rule" ? "正在添加…" : "添加并立即启用"}</button></div>
       <div className="rule-list"><div><span>词条</span><span>分类</span><span>检查范围</span><span>状态</span><span>操作</span></div>{blockedTerms.length === 0 ? <p>尚未设置词条。建议先加入用于测试的虚构项目代号，验证拦截后再设置正式规则。</p> : blockedTerms.map(item => <article key={item.id}><span><b>{item.term}</b><small>{item.note || `由${item.createdBy}设置`}</small></span><span>{item.category}</span><span>{item.matchScope === "all" ? "文件名＋正文" : item.matchScope === "filename" ? "仅文件名" : "仅正文"}</span><span><em className={item.enabled ? "enabled" : "disabled"}>{item.enabled ? "已启用" : "已停用"}</em></span><span><button disabled={working === item.id} onClick={() => void toggleBlockedTerm(item)}>{item.enabled ? "停用" : "启用"}</button><button disabled={working === item.id} className="delete" onClick={() => void deleteBlockedTerm(item)}>删除</button></span></article>)}</div>
@@ -1066,6 +1089,67 @@ function Admin({ user, records, summary, refresh }: { user: SessionUser | null; 
       </section>
       <section className="panel audit-panel"><h2>最近审计记录</h2><p>关键操作自动记录操作人、对象和时间。</p>{logs.length === 0 ? <div className="queue-empty">暂无操作记录</div> : logs.slice(0,8).map(log => <article key={log.id}><i/><div><strong>{log.action} · {log.operator}</strong><span>{log.detail}</span><small>{formatDate(log.createdAt)}</small></div></article>)}</section>
     </div>
+  </section>;
+}
+
+function WritingRecipientOptionsAdmin({ isSystemAdmin }: { isSystemAdmin: boolean }) {
+  const [options, setOptions] = useState<WritingRecipientOption[]>([]);
+  const [newName, setNewName] = useState("");
+  const [working, setWorking] = useState("");
+  const [message, setMessage] = useState("");
+
+  // 说明：管理员读取全部启用和停用配置以维护排序；普通用户不渲染该管理区，服务端也会再次拒绝越权请求。
+  const load = useCallback(async () => {
+    if (!isSystemAdmin) return;
+    const response = await fetch("/api/writing/recipient-options?includeDisabled=true", { cache: "no-store" });
+    const data = await response.json() as { options?: WritingRecipientOption[]; error?: string };
+    if (response.ok) setOptions(data.options || []); else setMessage(data.error || "读取报送/发送对象失败");
+  }, [isSystemAdmin]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void load(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+
+  // 说明：新增、编辑、停用、排序和删除都只调用受控服务端接口；删除已被公文引用的项会由服务端拒绝。
+  async function create() {
+    setWorking("create"); setMessage("");
+    try {
+      const response = await fetch("/api/writing/recipient-options", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newName }) });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "新增报送/发送对象失败");
+      setNewName(""); setMessage("报送/发送对象已新增。"); await load();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "新增报送/发送对象失败"); }
+    finally { setWorking(""); }
+  }
+
+  async function update(option: WritingRecipientOption, changes: Partial<Pick<WritingRecipientOption, "name" | "enabled" | "sortOrder">>) {
+    setWorking(option.id); setMessage("");
+    try {
+      const response = await fetch(`/api/writing/recipient-options/${option.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "更新报送/发送对象失败");
+      setMessage("报送/发送对象已更新。"); await load();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "更新报送/发送对象失败"); }
+    finally { setWorking(""); }
+  }
+
+  async function remove(option: WritingRecipientOption) {
+    if (!window.confirm(`确定删除“${option.name}”吗？已被历史公文使用的对象只能停用。`)) return;
+    setWorking(option.id); setMessage("");
+    try {
+      const response = await fetch(`/api/writing/recipient-options/${option.id}`, { method: "DELETE" });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "删除报送/发送对象失败");
+      setMessage("未被使用的对象已删除。"); await load();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "删除报送/发送对象失败"); }
+    finally { setWorking(""); }
+  }
+
+  if (!isSystemAdmin) return null;
+  return <section className="panel upload-control-panel"><div className="control-head"><div><h2>报送/发送对象管理</h2><p>智能写作第一阶段只能选择启用对象。已被历史公文使用的对象请停用，避免影响追溯。</p></div><b>{options.filter((option) => option.enabled).length}项启用</b></div>
+    <div className="rule-form"><label><span>对象名称 *</span><input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="例如：集团办公室"/></label><button disabled={!newName.trim() || working === "create"} onClick={() => void create()}>{working === "create" ? "正在新增…" : "新增对象"}</button></div>
+    {message && <div className="notice admin-notice">{message}</div>}
+    <div className="rule-list"><div><span>名称</span><span>排序</span><span>状态</span><span>创建人</span><span>操作</span></div>{options.length === 0 ? <p>尚未维护对象。新增后，智能写作会显示为下拉选项。</p> : options.map((option) => <article key={option.id}><span><input aria-label={`${option.name}名称`} defaultValue={option.name} onBlur={(event) => { const name = event.target.value.trim(); if (name && name !== option.name) void update(option, { name }); }}/></span><span><input aria-label={`${option.name}排序`} type="number" defaultValue={option.sortOrder} onBlur={(event) => { const sortOrder = Number(event.target.value); if (Number.isFinite(sortOrder) && sortOrder !== option.sortOrder) void update(option, { sortOrder }); }}/></span><span><em className={option.enabled ? "enabled" : "disabled"}>{option.enabled ? "已启用" : "已停用"}</em></span><span>{option.createdBy}</span><span><button disabled={working === option.id} onClick={() => void update(option, { enabled: !option.enabled })}>{option.enabled ? "停用" : "启用"}</button><button disabled={working === option.id} className="delete" onClick={() => void remove(option)}>删除</button></span></article>)}</div>
   </section>;
 }
 

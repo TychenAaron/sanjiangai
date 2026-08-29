@@ -164,10 +164,19 @@ export const knowledgeMessageCitations = sqliteTable("knowledge_message_citation
 export const writingDocuments = sqliteTable("writing_documents", {
   id: text("id").primaryKey(), documentType: text("document_type").notNull(), title: text("title").notNull(),
   submittingDepartment: text("submitting_department").notNull(), recipient: text("recipient").notNull(), facts: text("facts").notNull(),
+  // 新任务保存管理员配置的对象 ID；历史自由文本记录保持 null，仍可正常读取和导出。
+  recipientOptionId: text("recipient_option_id"),
   referenceQuery: text("reference_query").notNull(), referencesJson: text("references_json").notNull().default("[]"),
   status: text("status").notNull().default("outline"), createdByUserId: text("created_by_user_id").notNull(), createdBy: text("created_by").notNull(),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`), updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-}, (table) => [index("writing_documents_creator_idx").on(table.createdByUserId), index("writing_documents_updated_idx").on(table.updatedAt)]);
+}, (table) => [index("writing_documents_creator_idx").on(table.createdByUserId), index("writing_documents_updated_idx").on(table.updatedAt), index("writing_documents_recipient_option_idx").on(table.recipientOptionId)]);
+
+// 管理员维护的报送/发送对象配置。它不替代 writing_documents.recipient，后者继续保存历史展示文本。
+export const writingRecipientOptions = sqliteTable("writing_recipient_options", {
+  id: text("id").primaryKey(), name: text("name").notNull(), enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0), createdBy: text("created_by").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`), updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [uniqueIndex("writing_recipient_options_name_unique").on(table.name), index("writing_recipient_options_enabled_sort_idx").on(table.enabled, table.sortOrder, table.name)]);
 
 // 公文版本记录提纲、草稿、人工修改稿和最终定稿，读写目的仅为人工写作过程追溯。
 export const writingVersions = sqliteTable("writing_versions", {

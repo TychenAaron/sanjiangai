@@ -1,7 +1,7 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { env } from "cloudflare:workers";
 import { getDb } from "../../../db";
-import { auditLogs, writingArtifacts, writingDocuments, writingPrivateReferences, writingVersions } from "../../../db/schema";
+import { auditLogs, writingArtifacts, writingDocuments, writingPrivateReferences, writingRecipientOptions, writingVersions } from "../../../db/schema";
 import { accessError, requireAccessUser } from "../../../lib/access";
 import { buildOutline, buildWritingKnowledgeQuery, checkWriting, resolveWritingKnowledge, summarizePrivateReferences, WRITING_TYPES, type WritingKnowledgeRetrieval, type WritingType } from "../../../lib/writing";
 import { normalizeStructuredWriting, structuredWritingToText } from "../../../lib/writing-structured";
@@ -11,6 +11,13 @@ import { getRequestId, writeStructuredLog } from "../../../lib/runtime-observabi
 export const runtime = "edge";
 
 function canManageWriting(user: { role: string }) { return user.role === "system_admin"; }
+
+// 说明：生成新公文前校验管理员维护的启用对象。输入为选项 ID，输出不可伪造的显示名称；只读取配置表，历史自由文本公文不受影响。
+async function resolveEnabledRecipientOption(db: ReturnType<typeof getDb>, recipientOptionId: string) {
+  if (!recipientOptionId) return null;
+  const [option] = await db.select().from(writingRecipientOptions).where(and(eq(writingRecipientOptions.id, recipientOptionId), eq(writingRecipientOptions.enabled, true))).limit(1);
+  return option ?? null;
+}
 
 // 说明：把安全审计类别转换为页面可见的短提示。输入不包含模型原文，输出不会泄露提示词、私有材料或网关内部错误。
 function writingGenerationError(category: WritingGenerationResult["category"]) {
@@ -126,13 +133,15 @@ export async function POST(request: Request) {
       const id = String(body.id || "");
       const documentType = String(body.documentType || "") as WritingType;
       const title = String(body.title || "").trim();
-      const recipient = String(body.recipient || "").trim();
       const facts = String(body.facts || "").trim();
       const referenceQuery = String(body.referenceQuery || "").trim();
       if (!id || !WRITING_TYPES.has(documentType) || !title) return Response.json({ error: "请填写完整的提纲参数" }, { status: 400 });
       const [writing] = await db.select().from(writingDocuments).where(eq(writingDocuments.id, id));
       if (!writing) return Response.json({ error: "公文草稿不存在" }, { status: 404 });
       if (!canManageWriting(user) && writing.createdByUserId !== user.id) return Response.json({ error: "只能更新自己的公文提纲" }, { status: 403 });
+      const recipientOption = await resolveEnabledRecipientOption(db, String(body.recipientOptionId || ""));
+      if (!recipientOption) return Response.json({ error: "请选择启用的报送/发送对象" }, { status: 400 });
+      const recipient = recipientOption.name;
       // 说明：重新检索只使用当前账号仍有权查看的资料，并把新提纲作为同一工作区的 outline 历史版本保存；不会读取无权资料或创建新的公文记录。
       const knowledge = await resolveWritingKnowledge(user, buildWritingKnowledgeQuery({ documentType, title, recipient, facts, referenceQuery }));
       const references = knowledge.references;
@@ -152,7 +161,7 @@ export async function POST(request: Request) {
       const versions = await db.select().from(writingVersions).where(eq(writingVersions.writingDocumentId, id));
       const now = new Date().toISOString(); const checks = checkWriting(title, recipient, facts, outline);
       const nextVersionNo = Math.max(0, ...versions.map((version) => version.versionNo)) + 1;
-      await db.update(writingDocuments).set({ documentType, title, recipient, facts, referenceQuery, referencesJson: "[]", status: "generated", updatedAt: now }).where(eq(writingDocuments.id, id));
+      await db.update(writingDocuments).set({ documentType, title, recipient, recipientOptionId: recipientOption.id, facts, referenceQuery, referencesJson: "[]", status: "generated", updatedAt: now }).where(eq(writingDocuments.id, id));
       const writingVersionId = crypto.randomUUID(); const structuredContentJson = structured ? JSON.stringify(structured) : "";
       await db.insert(writingVersions).values({ id: writingVersionId, writingDocumentId: id, versionNo: nextVersionNo, stage: "generated", content: generatedText, structuredContentJson, checksJson: JSON.stringify(checks), createdByUserId: user.id, createdBy: user.name, createdAt: now });
       await createNonFormalWritingArtifact({ db, writingId: id, writingVersionId, user, content: generatedText, structuredContentJson, privateReferenceIds: privateReferences.map((item) => item.id), formalEvidenceIds: references.map((item) => `${item.documentId}/${item.versionId}/${item.chunkIndex}`), now });
@@ -163,10 +172,12 @@ export async function POST(request: Request) {
     if (action === "create") {
       const documentType = String(body.documentType || "") as WritingType;
       const title = String(body.title || "").trim();
-      const recipient = String(body.recipient || "").trim();
       const facts = String(body.facts || "").trim();
       const referenceQuery = String(body.referenceQuery || "").trim();
       if (!WRITING_TYPES.has(documentType) || !title) return Response.json({ error: "请选择文种并填写标题" }, { status: 400 });
+      const recipientOption = await resolveEnabledRecipientOption(db, String(body.recipientOptionId || ""));
+      if (!recipientOption) return Response.json({ error: "请选择启用的报送/发送对象" }, { status: 400 });
+      const recipient = recipientOption.name;
       const knowledge = await resolveWritingKnowledge(user, buildWritingKnowledgeQuery({ documentType, title, recipient, facts, referenceQuery }));
       const references = knowledge.references;
       const outline = buildOutline(documentType, title, recipient, facts, references, []);
@@ -181,7 +192,7 @@ export async function POST(request: Request) {
       const structured = generation.structured;
       const generatedText = generation.content;
       const checks = checkWriting(title, recipient, facts, outline);
-      await db.insert(writingDocuments).values({ id, documentType, title, submittingDepartment: user.departmentName, recipient, facts, referenceQuery, referencesJson: "[]", status: "outline", createdByUserId: user.id, createdBy: user.name, createdAt: now, updatedAt: now });
+      await db.insert(writingDocuments).values({ id, documentType, title, submittingDepartment: user.departmentName, recipient, recipientOptionId: recipientOption.id, facts, referenceQuery, referencesJson: "[]", status: "outline", createdByUserId: user.id, createdBy: user.name, createdAt: now, updatedAt: now });
       const structuredContentJson = structured ? JSON.stringify(structured) : "";
       await db.insert(writingVersions).values({ id: versionId, writingDocumentId: id, versionNo: 1, stage: "generated", content: generatedText, structuredContentJson, checksJson: JSON.stringify(checks), createdByUserId: user.id, createdBy: user.name, createdAt: now });
       await createNonFormalWritingArtifact({ db, writingId: id, writingVersionId: versionId, user, content: generatedText, structuredContentJson, privateReferenceIds: [], formalEvidenceIds: references.map((item) => `${item.documentId}/${item.versionId}/${item.chunkIndex}`), now });
@@ -204,7 +215,8 @@ export async function POST(request: Request) {
       const nextVersionNo = Math.max(0, ...versions.map((version) => version.versionNo)) + 1;
       // 说明：导出前把人工修改的区块写为 edited 版本，仅用于同一工作区追溯，不写入 documents 知识库。
       await db.insert(writingVersions).values({ id: crypto.randomUUID(), writingDocumentId: id, versionNo: nextVersionNo, stage: "edited", content, structuredContentJson: JSON.stringify(structured), checksJson: JSON.stringify(checks), createdByUserId: user.id, createdBy: user.name, createdAt: now });
-      await db.update(writingDocuments).set({ documentType: structured.documentType, title: structured.title, recipient: structured.recipient, submittingDepartment: structured.submittingDepartment || writing.submittingDepartment, status: "generated", updatedAt: now }).where(eq(writingDocuments.id, id));
+      // 说明：第二阶段只保存正文编辑，不允许借由浏览器改写管理员选择的报送对象；历史自由文本也继续保持原值。
+      await db.update(writingDocuments).set({ documentType: structured.documentType, title: structured.title, submittingDepartment: structured.submittingDepartment || writing.submittingDepartment, status: "generated", updatedAt: now }).where(eq(writingDocuments.id, id));
       await db.insert(auditLogs).values({ id: crypto.randomUUID(), action: "更新结构化公文正文", entityType: "writing_document", entityId: id, operator: user.name, detail: `V${nextVersionNo}.0｜仅工作区，不自动入库`, createdAt: now });
       return Response.json({ ok: true, checks });
     }
